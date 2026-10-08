@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS picks (
     away_team    TEXT,
     home_team    TEXT,
     stat         TEXT,
+    stat_detail  TEXT,                            -- the market in plain words ("Home runs")
     category     TEXT,
     side         TEXT,
     direction    INTEGER,
@@ -68,7 +69,7 @@ CREATE INDEX IF NOT EXISTS ix_picks_week ON picks(nfl_week, bet_key);
 
 PICK_COLUMNS = [
     "league", "bet_type", "period", "player", "player_key", "team", "opponent", "away_team",
-    "home_team", "stat", "category", "side", "direction", "line", "odds", "units",
+    "home_team", "stat", "stat_detail", "category", "side", "direction", "line", "odds", "units",
     "parlay_group", "bet_key", "label", "snippet",
 ]
 
@@ -84,7 +85,16 @@ def connect(path: Path = DB_PATH) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after a database was first created."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(picks)")}
+    if "stat_detail" not in cols:
+        with conn:
+            conn.execute("ALTER TABLE picks ADD COLUMN stat_detail TEXT")
 
 
 # --- accounts ---------------------------------------------------------------

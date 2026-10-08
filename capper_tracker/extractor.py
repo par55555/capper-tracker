@@ -45,6 +45,9 @@ TOOL = {
                         "away_team": _nullable("string"),
                         "home_team": _nullable("string"),
                         "stat": {"type": ["string", "null"], "enum": STATS + [None]},
+                        "stat_detail": _nullable("string", description=(
+                            "The market in plain words as the post states it, e.g. 'Home runs', "
+                            "'Hits + Runs + RBIs', 'Rebounds', 'Anytime goal'. Required for props.")),
                         "side": {"type": ["string", "null"], "enum": SIDES + [None]},
                         "line": _nullable("number"),
                         "odds": _nullable("integer", description="American odds, e.g. -115 or 240"),
@@ -52,7 +55,7 @@ TOOL = {
                         "parlay_group": _nullable("string"),
                         "snippet": {"type": "string"},
                     },
-                    "required": ["league", "bet_type", "period", "player", "team", "stat",
+                    "required": ["league", "bet_type", "period", "player", "team", "stat", "stat_detail",
                                  "side", "line", "odds", "units", "parlay_group", "snippet"],
                 },
             },
@@ -67,18 +70,22 @@ First classify the post (tweet_type):
 - new_pick: the author recommends or announces a bet on a game that has not been settled.
 - result_recap: reports outcomes of settled bets ("cashed", "✅", "went 4-1 yesterday"). Record no picks.
 - promo: discount codes, Discord/subscription ads, giveaways with no specific bet. Record no picks.
-- other: commentary, analysis with no stated bet, memes. Record no picks.
+- other: anything with no bet in it: commentary, analysis without a stated bet, memes, replies. Record no picks.
+Only new_pick posts should have picks.
 
-Rules for picks:
+Rules for picks (all sports; set league to NFL, NCAAF, MLB, NBA, WNBA, NCAAB, NHL, etc.):
 - Record every distinct wager, including each one in a list-style "card".
 - Parlays and same-game parlays: record each leg as its own pick, all legs sharing one parlay_group label ("p1", "p2", ...). Straight bets use parlay_group null.
 - "Tailing @someone" or quoting another capper's pick counts as the author's pick.
-- NFL teams use these abbreviations only: ARI ATL BAL BUF CAR CHI CIN CLE DAL DEN DET GB HOU IND JAX KC LV LAC LAR MIA MIN NE NO NYG NYJ PHI PIT SF SEA TB TEN WAS.
+- NFL teams use these abbreviations only: ARI ATL BAL BUF CAR CHI CIN CLE DAL DEN DET GB HOU IND JAX KC LV LAC LAR MIA MIN NE NO NYG NYJ PHI PIT SF SEA TB TEN WAS. For other leagues use the team's standard abbreviation (e.g. SD, NYY, LAD; NYL, LVA; NJD, MTL).
 - team = the player's team for props, or the backed team for spread / moneyline / team total. For game totals set away_team and home_team and leave team null.
 - Player names in full with normal capitalization ("Ja'Marr Chase"). Expand last names or nicknames only when you are confident who is meant.
+- stat: pick the closest listed stat for the sport. Football: passing/rushing/receiving yards etc. Baseball: home_runs, hits, total_bases, stolen_bases, hits_runs_rbis, rbis, runs, singles, doubles, walks, pitcher_strikeouts, outs_recorded. Basketball: points, rebounds, assists, threes_made, pts_reb_ast, pts_reb, pts_ast, reb_ast, steals, blocks, double_double. Hockey: goals, hockey_assists, hockey_points, shots_on_goal, saves, anytime_goal. Use "other" only when nothing fits, and always describe the market in stat_detail.
+- stat_detail: always fill it for props with the market in plain words, even when stat is not "other".
+- Thresholds: "N+" or "to record N+" means side "over" with line N - 0.5 ("2+ hits" -> over 1.5; "1+ home runs" or "to hit a home run" -> over 0.5; "to hit a double" -> doubles over 0.5).
+- Scorer markets: football "anytime TD" -> stat "anytime_td", hockey "anytime goal" -> stat "anytime_goal"; side "yes", line null.
 - line is a number. "o24.5 rec yds" -> side "over", line 24.5, stat "receiving_yards". For spreads the line is the backed team's number (e.g. -3.5). Moneylines have line null.
-- "ATD"/"anytime TD"/"to score" -> stat "anytime_td", side "yes". "Rush + rec yds" -> "rush_rec_yards". "Pass + rush yds" -> "pass_rush_yards". Use "other" for any prop stat not in the list.
-- odds: American odds as an integer only if shown. units: stake in units only if stated ("2u", "1.5U").
+- odds: American odds of THIS pick only. For a parlay leg use the leg's own odds if shown, otherwise null; never put the parlay's combined odds on a leg. units: stake in units only if stated ("2u", "1.5U").
 - Never invent games, lines, odds or players. Use null for anything not stated or confidently inferable.
 - snippet: the shortest verbatim piece of the post or slip that states the bet."""
 

@@ -100,6 +100,37 @@ class FakeAnthropic:
         return SimpleNamespace(content=[block], stop_reason="tool_use")
 
 
+def espn_event(eid, when, away, home, state="pre", venue="Stadium"):
+    def team(t):
+        abbr, loc, nick = t
+        return {"abbreviation": abbr, "displayName": f"{loc} {nick}", "shortDisplayName": nick,
+                "location": loc, "name": nick}
+    return {"id": eid, "date": when, "shortName": f"{away[0]} @ {home[0]}",
+            "status": {"type": {"state": state}},
+            "competitions": [{"venue": {"fullName": venue}, "competitors": [
+                {"homeAway": "home", "team": team(home)}, {"homeAway": "away", "team": team(away)}]}]}
+
+
+FAKE_ESPN = {
+    ("football/nfl", "20261011"): [
+        espn_event("n1", "2026-10-11T17:00Z", ("CIN", "Cincinnati", "Bengals"), ("PIT", "Pittsburgh", "Steelers")),
+        espn_event("n2", "2026-10-11T20:25Z", ("BUF", "Buffalo", "Bills"), ("NE", "New England", "Patriots")),
+    ],
+}
+
+
+def fake_espn(url, params):
+    path = url.split("/sports/")[1].rsplit("/scoreboard", 1)[0]
+    return {"events": FAKE_ESPN.get((path, params["dates"]), [])}
+
+
+@pytest.fixture(autouse=True)
+def offline_espn(monkeypatch):
+    """Keep tests offline: every Schedule reads the fake ESPN feed above."""
+    from capper_tracker import games
+    monkeypatch.setattr(games.Schedule, "_http_get", staticmethod(fake_espn))
+
+
 @pytest.fixture
 def conn(tmp_path):
     return db.connect(tmp_path / "test.db")
@@ -115,8 +146,8 @@ def run_pipeline(conn, tmp_path):
 
 
 def report_frames(conn):
-    return build_report(db.picks_frame(conn, WINDOW.start_utc, WINDOW.end_utc),
-                        db.tweets_frame(conn, WINDOW.start_utc, WINDOW.end_utc))
+    pipeline._FRAMES_CACHE.clear()
+    return pipeline._frames(conn, WINDOW)
 
 
 def test_end_to_end(conn, tmp_path):
@@ -137,8 +168,8 @@ def test_end_to_end(conn, tmp_path):
     assert chase_over["lines"] == "77.5 to 79.5"     # latest line per account
 
     # sharp_sam flipped Burrow over -> under: only the under counts
-    assert "Joe Burrow over passing tds" not in bets.index
-    assert bets.loc["Joe Burrow under passing tds", "accounts"] == 1
+    assert "Joe Burrow over passing TDs" not in bets.index
+    assert bets.loc["Joe Burrow under passing TDs", "accounts"] == 1
     picks = frames["Picks"]
     assert picks.loc[picks["label"].str.startswith("Joe Burrow"), "switched_side"].all()
 
@@ -156,7 +187,16 @@ def test_end_to_end(conn, tmp_path):
     wb = load_workbook(path)
     assert path.name.startswith("week05_consensus_")
     assert wb.sheetnames == ["Top Consensus", "Team Themes", "Players", "All Bets",
-                             "Conflicts", "Picks", "Tweets"]
+                             "Conflicts", "Picks", "Tweets", "Guide"]
+    top = frames["Top Consensus"].set_index("bet")
+    assert top.loc["Ja'Marr Chase over receiving yards", "what_it_means"].startswith(
+        "2 accounts like Ja'Marr Chase (CIN, NFL) to record over 77.5 to 79.5 receiving yards")
+    assert top.loc["Ja'Marr Chase over receiving yards", "game"] == "CIN @ PIT"
+    assert top.loc["Josh Allen over rushing yards", "game"] == "BUF @ NE"
+    assert top.loc["Josh Allen over rushing yards", "game_status"] == "Upcoming"
+    assert list(frames["Top Consensus"].columns[:5]) == ["league", "game_time_et", "game", "game_status", "bet"]
+    tweets = frames["Tweets"].set_index("tweet_id")
+    assert tweets.loc["102", "post_type"].startswith("Recap")
 
 
 def test_posts_outside_window_are_ignored(conn, tmp_path):
@@ -177,3 +217,140 @@ def test_recap_never_yields_picks():
     block = SimpleNamespace(type="tool_use", name="record_picks",
                             input={"tweet_type": "result_recap", "picks": [{"bet_type": "spread"}]})
     assert parse_response(SimpleNamespace(content=[block])).picks == []
+
+
+def test_summary_and_latest_copy(conn, tmp_path):
+    _, _, path = run_pipeline(conn, tmp_path)
+    assert (path.parent / "latest_consensus.xlsx").exists()
+    s = pipeline.summary(conn, WINDOW)
+    assert s["picks"] == 8 and s["accounts_with_picks"] == 3 and s["shared_bets"] == 2
+    assert s["top"][0].endswith("(2)")
+    assert "BUF rushing threat" in s["themes"]
+
+
+def test_schedule_plist():
+    from capper_tracker import schedule
+    plist = schedule.build_plist("/opt/py/bin/python")
+    assert plist["ProgramArguments"] == ["/opt/py/bin/python", "-m", "capper_tracker", "run", "--notify"]
+    assert {(d["Weekday"], d["Hour"]) for d in plist["StartCalendarInterval"]} == {(4, 12), (0, 11)}
+
+
+def test_notify_quoting_is_safe():
+    from capper_tracker.notify import _osa_quote
+    assert _osa_quote('Ja\'Marr "Chase" o74.5') == '"Ja\'Marr \\"Chase\\" o74.5"'
+
+
+def _bad_request(msg):
+    import anthropic
+    try:
+        import httpx2 as httpx
+    except ImportError:
+        import httpx
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return anthropic.BadRequestError(msg, response=httpx.Response(400, request=req), body=None)
+
+
+def test_falls_back_when_forced_tool_choice_unsupported():
+    calls = []
+
+    class Client:
+        def __init__(self):
+            self.messages = SimpleNamespace(create=self.create)
+
+        def create(self, **kw):
+            calls.append(kw["tool_choice"]["type"])
+            if kw["tool_choice"]["type"] == "tool":
+                raise _bad_request('tool_choice: type "tool" and "any" are not supported for this model.')
+            if len(calls) == 2:  # first auto call: model answers in prose
+                return SimpleNamespace(content=[SimpleNamespace(type="text", text="no picks")])
+            block = SimpleNamespace(type="tool_use", name="record_picks",
+                                    input={"tweet_type": "promo", "picks": []})
+            return SimpleNamespace(content=[block])
+
+    ex = PickExtractor(model="m", client=Client())
+    result = ex.extract(handle="a", created_at="x", week=5, text="use code SAVE20", media_urls=[])
+    assert result.tweet_type == "promo"
+    assert calls == ["tool", "auto", "auto"] and ex.forced_tool_choice is False
+
+
+
+def test_other_sports_are_described_and_never_merged():
+    from capper_tracker.analyze import build_report
+    from capper_tracker.normalize import clean_pick
+    raw = [
+        ("a", dict(league="MLB", bet_type="player_prop", player="Fernando Tatis Jr.", team="SD",
+                   stat="home_runs", stat_detail="Home runs", side="over", line=1, snippet="1+ home runs")),
+        ("b", dict(league="MLB", bet_type="player_prop", player="Fernando Tatis Jr.", team="SD",
+                   stat="stolen_bases", stat_detail="Stolen bases", side="over", line=0.5, snippet="1+ SB")),
+        ("c", dict(league="MLB", bet_type="player_prop", player="Fernando Tatis Jr.", team="SD",
+                   stat="home_runs", stat_detail="Home runs", side="yes", snippet="to hit a home run",
+                   parlay_group="p1", odds=1285)),
+        ("a", dict(league="WNBA", bet_type="player_prop", player="A'ja Wilson", team="LVA",
+                   stat="other", stat_detail="Free throws made", side="over", line=5.5, snippet="o5.5 FTM")),
+        ("b", dict(league="WNBA", bet_type="player_prop", player="A'ja Wilson", team="LVA",
+                   stat="other", stat_detail="Steals + blocks", side="over", line=2.5, snippet="o2.5 stocks")),
+        ("c", dict(league="NHL", bet_type="player_prop", player="Claude Giroux", team="OTT",
+                   stat="anytime_goal", stat_detail="Anytime goal", side="yes", snippet="Anytime Goal Scorer")),
+        ("d", dict(league="NHL", bet_type="player_prop", player="Claude Giroux", team="OTT",
+                   stat="anytime_goal", stat_detail="Anytime goal", side="yes", snippet="AGS", odds=250)),
+    ]
+    rows = []
+    for i, (handle, r) in enumerate(raw):
+        p = clean_pick(r)
+        p.update(handle=handle, tweet_id=str(i), created_at=f"2026-10-0{7 if i < 5 else 8}T12:00:00+00:00",
+                 url="u", nfl_week=5)
+        rows.append(p)
+    frames = build_report(pd.DataFrame(rows), pd.DataFrame())
+    bets = frames["All Bets"].set_index("bet")
+    hr = bets.loc["[MLB] Fernando Tatis Jr. over home runs"]
+    assert hr["accounts"] == 2 and hr["league"] == "MLB"
+    assert hr["what_it_means"] == ("2 accounts like Fernando Tatis Jr. (SD, MLB) to record 1+ home runs; "
+                                   "1 of 2 as parlay legs.")
+    assert pd.isna(hr["median_odds_straight"])          # the 1285 parlay price is not used
+    assert bets.loc["[MLB] Fernando Tatis Jr. over stolen bases", "accounts"] == 1
+    assert "[WNBA] A'ja Wilson over free throws made" in bets.index
+    assert "[WNBA] A'ja Wilson over steals + blocks" in bets.index   # different 'other' markets stay apart
+    goal = bets.loc["[NHL] Claude Giroux anytime goal"]
+    assert goal["what_it_means"] == ("2 accounts like Claude Giroux (OTT, NHL) to score a goal; "
+                                     "typical straight-bet price +250.")
+    assert frames["Team Themes"].empty                    # pass/run themes are NFL-only
+
+
+
+def test_games_matched_across_sports_and_formats():
+    from datetime import date, datetime, timezone
+    from capper_tracker.games import Schedule, attach_games
+    feed = {
+        ("baseball/mlb", "20261006"): [espn_event("m0", "2026-10-06T23:10Z", ("SD", "San Diego", "Padres"),
+                                                  ("MIL", "Milwaukee", "Brewers"), state="post")],
+        ("baseball/mlb", "20261007"): [espn_event("m1", "2026-10-07T23:10Z", ("SD", "San Diego", "Padres"),
+                                                  ("MIL", "Milwaukee", "Brewers"))],
+        ("basketball/wnba", "20261007"): [espn_event("w1", "2026-10-08T00:00Z", ("NY", "New York", "Liberty"),
+                                                     ("LV", "Las Vegas", "Aces"))],
+        ("hockey/nhl", "20261008"): [espn_event("h1", "2026-10-08T23:00Z", ("OTT", "Ottawa", "Senators"),
+                                                ("MTL", "Montreal", "Canadiens"))],
+    }
+    sched = Schedule(fetch=lambda url, params: {"events": feed.get(
+        (url.split("/sports/")[1].rsplit("/scoreboard", 1)[0], params["dates"]), [])})
+    picks = pd.DataFrame([
+        # posted Wed afternoon -> Wednesday's game, not Tuesday's finished one
+        dict(league="MLB", team="SD", created_at="2026-10-07T16:00:00+00:00"),
+        dict(league="WNBA", team="LVA", created_at="2026-10-07T16:00:00+00:00"),        # ESPN uses LV
+        dict(league="WNBA", team="NEW YORK LIBERTY", created_at="2026-10-07T16:00:00+00:00"),
+        dict(league="NHL", team="Ottawa Senators", created_at="2026-10-08T12:00:00+00:00"),
+        dict(league="NHL", team="ZZZ", created_at="2026-10-08T12:00:00+00:00"),         # unknown team
+    ])
+    out = attach_games(picks, sched, date(2026, 10, 6), date(2026, 10, 9))
+    assert list(out["game"].fillna("")) == ["SD @ MIL", "NY @ LV", "NY @ LV", "OTT @ MTL", ""]
+    assert out.loc[0, "game_status"] == "Upcoming"
+    assert datetime.fromisoformat(out.loc[0, "game_time_et"]) == datetime(2026, 10, 7, 23, 10, tzinfo=timezone.utc)
+
+
+def test_espn_outage_leaves_columns_blank():
+    from datetime import date
+    from capper_tracker.games import Schedule, attach_games
+    def down(url, params):
+        raise ConnectionError("no network")
+    out = attach_games(pd.DataFrame([dict(league="NFL", team="KC", created_at="2026-10-07T16:00:00+00:00")]),
+                       Schedule(fetch=down), date(2026, 10, 6), date(2026, 10, 9))
+    assert out["game"].isna().all() and "game_time_et" in out.columns

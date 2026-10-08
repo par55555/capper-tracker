@@ -5,10 +5,10 @@ import json
 import logging
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import db
+from . import db, games
 from .analyze import build_report
 from .config import (ACCOUNTS_FILE, EXPORT_DIR, EXTRACT_WORKERS, MAX_TWEETS_PER_ACCOUNT, TZ,
                      Window, nfl_week)
@@ -101,12 +101,26 @@ def extract(conn, extractor, window: Window, retry_failed: bool = True, redo_all
     return stats
 
 
-def _frames(conn, window: Window):
-    return build_report(db.picks_frame(conn, window.start_utc, window.end_utc),
-                        db.tweets_frame(conn, window.start_utc, window.end_utc))
+_FRAMES_CACHE: dict = {}
+
+
+def _frames(conn, window: Window, schedule: "games.Schedule | None" = None):
+    """Build the report tables once per run (report and notification share them)."""
+    key = (id(conn), window.start_utc, window.end_utc)
+    if key not in _FRAMES_CACHE:
+        first = window.start.astimezone(TZ).date()
+        # Cover every game a pick posted in the window could be for (NFL: through Monday night).
+        last = max(window.end.astimezone(TZ).date(), first) + timedelta(days=8)
+        _FRAMES_CACHE.clear()
+        _FRAMES_CACHE[key] = build_report(
+            db.picks_frame(conn, window.start_utc, window.end_utc),
+            db.tweets_frame(conn, window.start_utc, window.end_utc),
+            schedule=schedule or games.Schedule(), game_days=(first, last))
+    return _FRAMES_CACHE[key]
 
 
 def report(conn, window: Window, out_dir: Path = EXPORT_DIR) -> Path:
+    _FRAMES_CACHE.clear()  # always rebuild for a fresh report
     """Write the dated workbook, plus a copy at exports/latest_consensus.xlsx for quick access."""
     stamp = datetime.now(TZ).strftime("%Y%m%d_%H%M")
     path = write_report(_frames(conn, window), Path(out_dir) / f"{window.name}_consensus_{stamp}.xlsx")

@@ -28,25 +28,34 @@ python -m capper_tracker extract --redo-all   # re-extract after changing the pr
 
 Runs are incremental. A Sunday run after a Thursday run only buys the posts made since Thursday from X and only sends those to the LLM, but the Sunday report still covers the whole week.
 
-### Schedule (cron, machine on Eastern time)
+### Schedule it (macOS, hands-off)
 
-```cron
-0 12 * * 4  cd /path/to/capper-tracker && .venv/bin/python -m capper_tracker run >> run.log 2>&1   # Thu noon, before TNF
-0 11 * * 0  cd /path/to/capper-tracker && .venv/bin/python -m capper_tracker run >> run.log 2>&1   # Sun 11am, before early games
+From the project folder, in the environment you run it with (e.g. `conda activate capper`):
+
+```bash
+python -m capper_tracker.schedule install    # Thu 12:00 + Sun 11:00, local time
+python -m capper_tracker.schedule run-now    # fire it once now to test
+python -m capper_tracker.schedule status     # last exit code / run count
+python -m capper_tracker.schedule uninstall
 ```
 
-A laptop has to be awake for cron to fire; Cloud Run Jobs + Cloud Scheduler is the always-on option (the SQLite file would then live in a mounted bucket or move to a hosted DB).
+Each run sends a macOS notification with the headline numbers, the top shared bets, and any team themes (or a failure alert pointing to `logs/run.log`). The newest report is always at `exports/latest_consensus.xlsx`, alongside the dated copies.
+
+- If the Mac is **asleep** at the scheduled time, the run happens when it wakes. If it's **shut down**, that run is skipped.
+- First notification not appearing? System Settings → Notifications → allow **Script Editor** (macOS attributes `osascript` notifications to it).
+- On Linux, use cron instead: `0 12 * * 4` and `0 11 * * 0` running `python -m capper_tracker run`.
 
 ## What the report contains
 
 | Sheet | What it answers |
 |---|---|
-| Top Consensus | Bets 2+ accounts share, ranked by number of accounts |
+| Top Consensus | Bets 2+ accounts share, ranked by number of accounts. Starts with league, game time (ET), matchup and status, then a plain-English `what_it_means` |
 | Team Themes | Per team: net accounts on pass-game overs vs run-game overs, labeled *Passing threat* / *Rushing threat* / *Pass + run* / *Fade*, plus who's driving it and TD-scorer interest |
 | Players | Every player any account touched: total accounts, over vs under lean, which props, conflict flag |
 | All Bets | Full grouped list, including singletons |
 | Conflicts | Markets where tracked accounts are on opposite sides |
-| Picks / Tweets | Raw extracted picks (with snippet and link) and every post with its classification, for auditing |
+| Picks / Tweets | Raw extracted picks (with snippet and link) and every post with its classification (`post_type`), for auditing |
+| Guide | Plain-English definitions of every column and term, including what 'other' means |
 
 Counting rules:
 
@@ -55,6 +64,8 @@ Counting rules:
 - Bets group **ignoring the exact line**: Chase o74.5 and o79.5 are the same bet; each account's latest line feeds the range shown.
 - Pass game = passing + receiving props; run game = rushing props. Rush+rec yards props are tracked but kept out of the pass/run split.
 - "J. Allen" and "Josh Allen" merge when first initial, last name and team agree.
+
+Game matchups and start times come from ESPN's public scoreboard feeds (no key). If ESPN is unreachable the report still builds with those columns blank.
 
 ## Cost (X pay-per-use, Oct 2026)
 

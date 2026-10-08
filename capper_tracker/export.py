@@ -13,14 +13,15 @@ from .config import TZ
 _HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 _HEADER_FONT = Font(name="Arial", bold=True, color="FFFFFF")
 _BODY_FONT = Font(name="Arial", size=10)
-_WRAP_COLUMNS = {"who", "bets", "pass_players", "run_players", "td_players", "snippet", "text"}
+_WRAP_COLUMNS = {"who", "bets", "pass_players", "run_players", "td_players", "snippet", "text",
+                 "what_it_means", "meaning", "post_type"}
 
 
 def _excel_safe(df: pd.DataFrame) -> pd.DataFrame:
     """Excel can't store tz-aware datetimes; show times in ET."""
     df = df.copy()
     for col in df.columns:
-        if col in ("created_at", "first_posted"):
+        if col in ("created_at", "first_posted", "game_time_et"):
             ts = pd.to_datetime(df[col], utc=True, errors="coerce")
             df[col] = ts.dt.tz_convert(TZ).dt.strftime("%a %m/%d %I:%M %p")
     return df

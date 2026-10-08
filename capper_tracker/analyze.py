@@ -1,13 +1,22 @@
 """Find what the tracked cappers agree on for a given week."""
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 
 from .config import THEME_MIN_ACCOUNTS
-from .normalize import bet_key, label
+from .games import GAME_COLUMNS, Schedule, attach_games
+from .normalize import EVENT_STATS, bet_key, label, stat_name
 
 PASS_GAME = {"passing", "receiving"}
 RUN_GAME = {"rushing"}
+
+
+def _first(values):
+    """Most common non-empty value (all picks in a group should point at the same game)."""
+    v = values.dropna()
+    return v.mode().iat[0] if not v.empty else None
 
 
 def _join(values) -> str:
@@ -101,25 +110,115 @@ def prepare(picks: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values("created_at").reset_index(drop=True)
 
 
+POST_TYPES = {
+    "new_pick": "Pick: recommends a bet on an unsettled game",
+    "result_recap": "Recap: reports results of settled bets (not counted)",
+    "promo": "Promo: ad, code or giveaway with no bet (not counted)",
+    "other": "No bet: commentary, analysis, memes or replies (not counted)",
+}
+
+
+def _fmt_lines(lo, hi) -> str:
+    if pd.isna(lo):
+        return ""
+    return f"{lo:g}" if lo == hi else f"{lo:g} to {hi:g}"
+
+
+def _threshold_phrase(side: str, lo, hi, stat: str) -> str:
+    """'over 0.5 home runs' reads better as '1+ home runs'."""
+    if pd.isna(lo):
+        return f"{side} {stat}"
+    if side == "over" and lo == hi and lo % 1 == 0.5 and lo < 10:
+        return f"{int(lo + 0.5)}+ {stat}"
+    return f"{side} {_fmt_lines(lo, hi)} {stat}"
+
+
+def explain(row: dict) -> str:
+    """One plain-English sentence describing what a grouped bet means."""
+    n, league = row["accounts"], row.get("league") or "NFL"
+    who = f"{n} account{'s' if n != 1 else ''}"
+    subject = row.get("player") or row.get("team") or "?"
+    team = row.get("team")
+    tag = f" ({team}, {league})" if team and row.get("player") else f" ({league})"
+    lo, hi, side, bt = row.get("line_min"), row.get("line_max"), row.get("side") or "", row["bet_type"]
+    stat = stat_name(row.get("stat"), row.get("stat_detail"))
+
+    if bt == "player_prop":
+        if row.get("stat") in EVENT_STATS:
+            event = {"anytime_td": "score a touchdown", "first_td": "score the first touchdown",
+                     "two_plus_tds": "score 2+ touchdowns", "anytime_goal": "score a goal",
+                     "double_double": "record a double-double"}.get(row["stat"], stat)
+            text = f"{who} like {subject}{tag} to {event}" if side == "yes" else \
+                f"{who} like {subject}{tag} NOT to {event}"
+        else:
+            text = f"{who} like {subject}{tag} to record {_threshold_phrase(side, lo, hi, stat)}"
+    elif bt == "spread":
+        text = f"{who} back {subject} ({league}) against the spread at {_fmt_lines(lo, hi)}"
+    elif bt == "moneyline":
+        text = f"{who} back {subject} ({league}) to win outright"
+    elif bt == "team_total":
+        text = f"{who} like the {side.upper()} on {subject}'s team total ({_fmt_lines(lo, hi)} points, {league})"
+    elif bt == "total":
+        game = (f"{row['away_team']} @ {row['home_team']}" if row.get("away_team") and row.get("home_team")
+                else subject)
+        text = f"{who} like the {side.upper()} in {game} ({_fmt_lines(lo, hi)} total, {league})"
+    else:
+        text = f"{who} on {row['bet']}"
+
+    legs = row.get("in_parlays", 0)
+    if legs and legs == n:
+        text += "; all as parlay legs"
+    elif legs:
+        text += f"; {legs} of {n} as parlay legs"
+    odds = row.get("median_odds_straight")
+    if odds is not None and not pd.isna(odds):
+        text += f"; typical straight-bet price {int(odds):+d}"
+    return text + "."
+
+
 def consensus_bets(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
-    g = df.groupby("bet_key")
+    d = df.copy()
+    d["odds_straight"] = d["odds"].where(d["parlay_group"].isna())  # parlay prices aren't a leg's price
+    if "stat_detail" not in d:
+        d["stat_detail"] = None
+    g = d.groupby("bet_key")
     out = g.agg(
+        league=("league", "first"),
         bet=("label", "first"),
         bet_type=("bet_type", "first"),
         category=("category", "first"),
+        player=("player", "first"),
+        team=("team", "first"),
+        away_team=("away_team", "first"),
+        home_team=("home_team", "first"),
+        stat=("stat", "first"),
+        stat_detail=("stat_detail", "first"),
+        side=("side", "first"),
         accounts=("handle", "nunique"),
         repeat_posts=("times_posted", lambda x: int(x.sum() - len(x))),
-        lines=("line", _line_range),
+        line_min=("line", "min"),
+        line_max=("line", "max"),
         median_line=("line", "median"),
-        median_odds=("odds", "median"),
+        median_odds_straight=("odds_straight", "median"),
         total_units=("units", "sum"),
         in_parlays=("parlay_group", lambda s: int(s.notna().sum())),
         who=("handle", _join),
         first_posted=("created_at", "min"),
+        game=("game", _first),
+        game_time_et=("game_time_et", _first),
+        game_status=("game_status", _first),
+        venue=("venue", _first),
     ).reset_index()
-    return out.sort_values(["accounts", "first_posted"], ascending=[False, True]).reset_index(drop=True)
+    out["what_it_means"] = [explain(r) for r in out.to_dict("records")]
+    out["lines"] = [_fmt_lines(a, b) for a, b in zip(out["line_min"], out["line_max"])]
+    cols = ["league", "game_time_et", "game", "game_status", "bet", "what_it_means", "accounts",
+            "who", "lines", "median_line", "median_odds_straight", "in_parlays", "repeat_posts",
+            "total_units", "venue", "bet_type", "category", "first_posted", "bet_key"]
+    out = out[cols].sort_values(["accounts", "game_time_et", "first_posted"],
+                                ascending=[False, True, True], na_position="last")
+    return out.reset_index(drop=True)
 
 
 def player_consensus(df: pd.DataFrame) -> pd.DataFrame:
@@ -130,16 +229,19 @@ def player_consensus(df: pd.DataFrame) -> pd.DataFrame:
     for key, grp in props.groupby("player_key"):
         bulls = set(grp.loc[grp["direction"] > 0, "handle"])
         bears = set(grp.loc[grp["direction"] < 0, "handle"])
-        per_bet = grp.groupby(["stat", "side"])["handle"].nunique().sort_values(ascending=False)
+        g2 = grp.assign(stat_text=[stat_name(a, b) for a, b in
+                                   zip(grp["stat"], grp.get("stat_detail", pd.Series(index=grp.index)))])
+        per_bet = g2.groupby(["stat_text", "side"])["handle"].nunique().sort_values(ascending=False)
         conflict = any(grp[grp["stat"] == st]["direction"].nunique() > 1 for st in grp["stat"].unique())
         rows.append({
+            "league": grp["league"].iat[0],
             "player": grp["player"].iat[0],
             "team": grp["team"].dropna().iat[0] if grp["team"].notna().any() else None,
             "accounts": grp["handle"].nunique(),
             "accounts_over_or_yes": len(bulls),
             "accounts_under_or_no": len(bears),
             "net_lean": len(bulls) - len(bears),
-            "bets": "; ".join(f"{st.replace('_', ' ')} {sd} x{n}" for (st, sd), n in per_bet.items()),
+            "bets": "; ".join(f"{sd} {st} x{n}" for (st, sd), n in per_bet.items()),
             "conflicting_sides": conflict,
             "who": _join(grp["handle"]),
         })
@@ -158,8 +260,9 @@ def team_themes(df: pd.DataFrame, min_accounts: int = THEME_MIN_ACCOUNTS) -> pd.
     pass game = QB passing props + pass-catcher receiving props; run game = rushing props.
     Net = distinct accounts betting overs minus distinct accounts betting unders.
     """
-    props = df[df["bet_type"].eq("player_prop") & df["team"].notna()]
-    sides = df[df["bet_type"].isin(["spread", "moneyline"]) & df["team"].notna()]
+    nfl = df[df["league"].fillna("NFL").str.upper().eq("NFL")]
+    props = nfl[nfl["bet_type"].eq("player_prop") & nfl["team"].notna()]
+    sides = nfl[nfl["bet_type"].isin(["spread", "moneyline"]) & nfl["team"].notna()]
     teams = sorted(set(props["team"]) | set(sides["team"]))
     rows = []
     for team in teams:
@@ -220,16 +323,24 @@ def conflicts(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build_report(picks: pd.DataFrame, tweets: pd.DataFrame) -> dict[str, pd.DataFrame]:
+def build_report(picks: pd.DataFrame, tweets: pd.DataFrame, schedule: Schedule | None = None,
+                 game_days: tuple[date, date] | None = None) -> dict[str, pd.DataFrame]:
     df = prepare(picks)
+    if not df.empty:
+        first, last = game_days or (date.today(), date.today())
+        df = attach_games(df, schedule, first, last)
     consensus = consensus_bets(df)
     players = player_consensus(df)
     themes = team_themes(df) if not df.empty else pd.DataFrame()
     summary = (consensus[consensus["accounts"] >= 2].drop(columns="bet_key").head(25)
                if not consensus.empty else consensus)
-    pick_cols = ["handle", "created_at", "label", "line", "odds", "units", "times_posted",
-                 "switched_side", "bet_type", "category", "player", "team", "stat", "side",
-                 "parlay_group", "snippet", "url"]
+    pick_cols = ["handle", "created_at", "league", "game_time_et", "game", "label", "line", "odds", "units", "times_posted",
+                 "switched_side", "bet_type", "category", "player", "team", "stat", "stat_detail",
+                 "side", "parlay_group", "snippet", "url"]
+    pick_cols = [c for c in pick_cols if c in df.columns]
+    if not tweets.empty:
+        tweets = tweets.copy()
+        tweets.insert(3, "post_type", tweets["tweet_type"].map(POST_TYPES).fillna("Not extracted yet"))
     return {
         "Top Consensus": summary,
         "Team Themes": themes,
@@ -238,4 +349,28 @@ def build_report(picks: pd.DataFrame, tweets: pd.DataFrame) -> dict[str, pd.Data
         "Conflicts": conflicts(df) if not df.empty else pd.DataFrame(),
         "Picks": df[pick_cols] if not df.empty else df,
         "Tweets": tweets,
+        "Guide": GUIDE,
     }
+
+
+GUIDE = pd.DataFrame([
+    ("Top Consensus", "Bets that 2+ tracked accounts posted this week, most-shared first. Start with 'what_it_means'."),
+    ("league", "Sport/league of the bet (NFL, NCAAF, MLB, WNBA, NHL, ...). Non-NFL bets are also tagged in 'bet', e.g. [MLB]."),
+    ("game / game_time_et", "The matchup (away @ home) and start time in Eastern, looked up from ESPN's schedule using the "
+                            "bet's team and the time it was posted. Blank if the team couldn't be matched or ESPN was unreachable."),
+    ("game_status", "Upcoming, Live or Final when the report ran. Final means the bet is already settled."),
+    ("lines", "The line(s) the accounts posted. Lines are grouped: o74.5 and o79.5 count as the same bet. '1+ home runs' = over 0.5."),
+    ("median_odds_straight", "Typical price from straight bets only. Parlay legs are excluded because a parlay's price isn't the leg's price."),
+    ("in_parlays", "How many of the accounts posted this bet as a parlay leg rather than a straight bet."),
+    ("repeat_posts", "Extra times the same accounts re-posted this bet. Repeats never add votes: one account = one vote."),
+    ("category", "Stat group. Football: passing, receiving, rushing, scoring, defense. Other sports: batting, pitching, "
+                 "rebounding, playmaking, shooting, goaltending, combo. 'other' = a market outside these lists; the bet name "
+                 "then shows the exact market in words (e.g. 'free throws made') and different 'other' markets are never merged."),
+    ("Team Themes", "NFL only. Net accounts on a team's pass-game overs (QB passing + receiving) vs run-game overs (rushing)."),
+    ("Players", "Every player any account touched, with over/under lean and conflict flag."),
+    ("All Bets", "Every grouped bet, including ones only one account posted."),
+    ("Conflicts", "Markets where tracked accounts are on opposite sides."),
+    ("Picks", "One row per account per bet after dedup, with the original snippet and link for checking."),
+    ("Tweets: post_type", "How each post was classified. Pick = counted. Recap, Promo and No bet "
+                          "(commentary, analysis, memes, replies; stored as 'other') are not counted."),
+], columns=["item", "meaning"])
