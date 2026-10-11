@@ -186,7 +186,7 @@ def test_end_to_end(conn, tmp_path):
 
     wb = load_workbook(path)
     assert path.name.startswith("week05_consensus_")
-    assert wb.sheetnames == ["Top Consensus", "Team Themes", "Players", "All Bets",
+    assert wb.sheetnames == ["Top Consensus", "Team Themes", "Players", "All Bets", "Already Played",
                              "Conflicts", "Picks", "Tweets", "Guide"]
     top = frames["Top Consensus"].set_index("bet")
     assert top.loc["Ja'Marr Chase over receiving yards", "what_it_means"].startswith(
@@ -354,3 +354,60 @@ def test_espn_outage_leaves_columns_blank():
     out = attach_games(pd.DataFrame([dict(league="NFL", team="KC", created_at="2026-10-07T16:00:00+00:00")]),
                        Schedule(fetch=down), date(2026, 10, 6), date(2026, 10, 9))
     assert out["game"].isna().all() and "game_time_et" in out.columns
+
+
+def test_old_picks_get_stats_from_snippet_without_reextraction():
+    """Picks stored as plain 'other' before the multi-sport update are fixed at report time, for free."""
+    from capper_tracker.analyze import renormalize
+    rows = [
+        ("MLB", "Fernando Tatis Jr.", "Fernando Tatis Jr. 1+ home runs", "over", 0.5),
+        ("MLB", "Fernando Tatis Jr.", "1+ Fernando Tatis Jr. Stolen Bases", "over", 0.5),
+        ("MLB", "Jo Adell", "Jo Adell PLAYER TO RECORD 2+ HITS + RUNS + RBIS", "yes", 2.0),
+        ("WNBA", "Sabrina Ionescu", "Sabrina Ionescu TO SCORE 15+ POINTS", "over", 15.0),
+        ("NHL", "Quinn Hughes", "Quinn Hughes 1+ ASSISTS", "over", 0.5),
+        ("NHL", "Claude Giroux", "Claude Giroux Anytime Goal Scorer", "yes", None),
+        ("NHL", "Bryan Rust", "Bryan Rust 2+ Yes", "yes", 2.0),
+    ]
+    old = pd.DataFrame([dict(league=lg, bet_type="player_prop", player=pl, snippet=sn, side=sd, line=ln,
+                             stat="other", stat_detail=None, period=None, team=None, opponent=None,
+                             away_team=None, home_team=None, odds=None, units=None, parlay_group="p1")
+                        for lg, pl, sn, sd, ln in rows])
+    new = renormalize(old)
+    assert list(new["label"]) == [
+        "[MLB] Fernando Tatis Jr. over home runs",
+        "[MLB] Fernando Tatis Jr. over stolen bases",
+        "[MLB] Jo Adell over hits + runs + RBIs",
+        "[WNBA] Sabrina Ionescu over points",
+        "[NHL] Quinn Hughes over assists",
+        "[NHL] Claude Giroux anytime goal",
+        "[NHL] Bryan Rust over unrecognized market (see snippet)",
+    ]
+    assert list(new["line"].fillna(-1)) == [0.5, 0.5, 1.5, 14.5, 0.5, -1, 1.5]
+    assert new.loc[0, "bet_key"] != new.loc[1, "bet_key"]      # home runs vs stolen bases stay separate
+
+
+
+def test_finished_games_leave_top_consensus():
+    """Settled bets (e.g. Thursday night's game on a Sunday run) must not crowd out upcoming ones."""
+    from datetime import date
+    from capper_tracker.analyze import build_report
+    from capper_tracker.games import Schedule
+    feed = {("football/nfl", "20261008"): [espn_event("t", "2026-10-09T00:15Z", ("TB", "Tampa Bay", "Buccaneers"),
+                                                      ("DAL", "Dallas", "Cowboys"), state="post")],
+            ("football/nfl", "20261011"): [espn_event("s", "2026-10-11T20:25Z", ("DET", "Detroit", "Lions"),
+                                                      ("ARI", "Arizona", "Cardinals"))]}
+    sched = Schedule(fetch=lambda url, params: {"events": feed.get(
+        (url.split("/sports/")[1].rsplit("/scoreboard", 1)[0], params["dates"]), [])})
+    def pick(handle, player, team, stat, side, line, posted):
+        return dict(handle=handle, tweet_id=handle + player, created_at=posted, url="u", nfl_week=5,
+                    league="NFL", bet_type="player_prop", period="game", player=player, team=team,
+                    opponent=None, away_team=None, home_team=None, stat=stat, stat_detail=None, side=side,
+                    line=line, odds=None, units=None, parlay_group=None, snippet="s")
+    thu, sun = "2026-10-08T16:00:00+00:00", "2026-10-11T14:00:00+00:00"
+    rows = [pick(h, "Chris Godwin", "TB", "receiving_yards", "over", 34.5, thu) for h in "abcde"]
+    rows += [pick(h, "Jahmyr Gibbs", "DET", "anytime_td", "yes", None, sun) for h in "ab"]
+    frames = build_report(pd.DataFrame(rows), pd.DataFrame(), schedule=sched,
+                          game_days=(date(2026, 10, 6), date(2026, 10, 14)))
+    assert list(frames["Top Consensus"]["bet"]) == ["Jahmyr Gibbs anytime touchdown"]
+    assert list(frames["Already Played"]["bet"]) == ["Chris Godwin over receiving yards"]
+    assert "TB" not in set(frames["Team Themes"].get("team", []))   # finished game left out of themes

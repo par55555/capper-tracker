@@ -74,6 +74,61 @@ SIDES = ["over", "under", "yes", "no", "team"]
 _SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
 
 
+# Recognize the market from the post text when the extractor didn't name it (older picks stored
+# as "other"). Ordered: more specific phrases first. Each rule: (leagues or None for any, regex, stat).
+_STAT_RULES = [
+    (None, r"hits?\s*\+\s*runs?\s*\+\s*rbis?|\bh\s*\+\s*r\s*\+\s*rbi", "hits_runs_rbis"),
+    (None, r"total bases|\btb\b", "total_bases"),
+    (None, r"home ?runs?|homers?|\bhrs?\b|to homer", "home_runs"),
+    (None, r"stolen bases?|\bsbs?\b", "stolen_bases"),
+    (None, r"\bdoubles?\b", "doubles"),
+    (None, r"\bsingles?\b", "singles"),
+    (None, r"\brbis?\b", "rbis"),
+    ({"MLB"}, r"strike ?outs?|\bks\b", "pitcher_strikeouts"),
+    ({"MLB"}, r"outs recorded", "outs_recorded"),
+    ({"MLB"}, r"\bhits\b|\bto record (a|\d+\+?) hits?\b", "hits"),
+    ({"MLB"}, r"\bruns? scored\b|\bto score a run\b", "runs"),
+    (None, r"points?\s*\+\s*rebounds?\s*\+\s*assists?|\bpra\b", "pts_reb_ast"),
+    (None, r"points?\s*\+\s*rebounds?|\bp\+r\b", "pts_reb"),
+    (None, r"points?\s*\+\s*assists?|\bp\+a\b", "pts_ast"),
+    (None, r"rebounds?\s*\+\s*assists?|\br\+a\b", "reb_ast"),
+    (None, r"made threes|threes made|3-?pointers?|\b3pm\b|\bthrees\b", "threes_made"),
+    (None, r"double[- ]double", "double_double"),
+    (None, r"rebounds?|\breb\b|\brebs\b", "rebounds"),
+    (None, r"shots on goal|\bsogs?\b", "shots_on_goal"),
+    ({"NHL"}, r"goal ?scorer|anytime goal|to score a goal", "anytime_goal"),
+    ({"NHL"}, r"\bgoals?\b", "goals"),
+    ({"NHL"}, r"\bsaves?\b", "saves"),
+    ({"NHL"}, r"assists?", "hockey_assists"),
+    ({"NHL"}, r"\bpoints?\b|\bpts\b", "hockey_points"),
+    (None, r"assists?|\bast\b", "assists"),
+    (None, r"steals?", "steals"),
+    (None, r"blocks?", "blocks"),
+    ({"NFL", "NCAAF"}, r"anytime (td|touchdown)|\batd\b|to score a (td|touchdown)", "anytime_td"),
+    (None, r"\bpoints?\b|\bpts\b", "points"),
+]
+_FILLER = (r"\b(player|players|to|record|score|hit|over|under|total|o|u|a|an|the|or more|and|more|yes|no|"
+           r"straight|parlay|leg|lock|play|bet|units?)\b")
+
+
+def infer_stat(league, snippet, player=None) -> tuple[str, str]:
+    """(stat, stat_detail) from the post text. Falls back to stat 'other' with the market in words."""
+    lg = (league or "NFL").upper() if isinstance(league, str) else "NFL"
+    text = snippet.lower() if isinstance(snippet, str) else ""
+    for leagues, pattern, stat in _STAT_RULES:
+        if (leagues is None or lg in leagues) and re.search(pattern, text):
+            return stat, STAT_LABEL.get(stat, stat.replace("_", " "))
+    # Nothing recognized: keep the market wording from the post, minus the player's name and numbers.
+    words = text
+    if isinstance(player, str) and player:
+        for part in re.split(r"\s*&\s*|\s+and\s+", player.lower()):
+            words = words.replace(part, " ")
+    words = re.sub(r"[-+]?\d+(\.\d+)?\+?|[^a-z ]", " ", words)
+    words = re.sub(_FILLER, " ", words)
+    words = re.sub(r"\s+", " ", words).strip()
+    return "other", (words[:60] if len(words) >= 3 else "unrecognized market (see snippet)")
+
+
 def _slug(text) -> str:
     text = text if isinstance(text, str) else ""
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") or "unknown"
@@ -84,7 +139,8 @@ def stat_name(stat: str | None, stat_detail: str | None = None) -> str:
     if not isinstance(stat, str) or not stat:  # NaN/None from pandas
         return ""
     if stat == "other":
-        detail = stat_detail if isinstance(stat_detail, str) and stat_detail.strip() else "unlisted stat"
+        detail = (stat_detail if isinstance(stat_detail, str) and stat_detail.strip()
+                  else "unrecognized market (see snippet)")
         return detail.strip().lower()
     return STAT_LABEL.get(stat, stat.replace("_", " "))
 
@@ -208,8 +264,10 @@ def clean_pick(raw: dict) -> dict:
         "parlay_group": raw.get("parlay_group") or None,
         "snippet": (raw.get("snippet") or "")[:300] or None,
     }
-    if p["bet_type"] == "player_prop" and p["stat"] is None:
-        p["stat"] = "other"
+    if p["bet_type"] == "player_prop" and p["stat"] in (None, "other") and not p["stat_detail"]:
+        # No stat named and no description (picks extracted before the multi-sport update):
+        # recognize the market from the post text instead.
+        p["stat"], p["stat_detail"] = infer_stat(league, p["snippet"], p["player"])
     _normalize_threshold(p)
     if p["bet_type"] in ("spread", "moneyline"):
         p["side"] = "team"

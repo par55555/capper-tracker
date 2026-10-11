@@ -7,7 +7,7 @@ import pandas as pd
 
 from .config import THEME_MIN_ACCOUNTS
 from .games import GAME_COLUMNS, Schedule, attach_games
-from .normalize import EVENT_STATS, bet_key, label, stat_name
+from .normalize import EVENT_STATS, bet_key, clean_pick, label, stat_name
 
 PASS_GAME = {"passing", "receiving"}
 RUN_GAME = {"rushing"}
@@ -86,6 +86,31 @@ def _market(df: pd.DataFrame) -> pd.Series:
     return no_side.where(df["direction"] != 0, df["bet_key"])
 
 
+_RAW_FIELDS = ["league", "bet_type", "period", "player", "team", "opponent", "away_team", "home_team",
+               "stat", "stat_detail", "side", "line", "odds", "units", "parlay_group", "snippet"]
+
+
+def renormalize(picks: pd.DataFrame) -> pd.DataFrame:
+    """Re-run today's normalization on stored picks (free; no API calls).
+
+    Picks extracted by older versions get the current rules: stats recognized from the snippet,
+    "N+" thresholds, readable labels and correct grouping keys.
+    """
+    if picks.empty:
+        return picks
+    df = picks.copy()
+    if "stat_detail" not in df:
+        df["stat_detail"] = None
+    rows = []
+    for r in df[_RAW_FIELDS].to_dict("records"):
+        raw = {k: (None if (not isinstance(v, str) and pd.isna(v)) else v) for k, v in r.items()}
+        rows.append(clean_pick(raw))
+    fresh = pd.DataFrame(rows, index=df.index)
+    for col in fresh.columns:
+        df[col] = fresh[col]
+    return df
+
+
 def prepare(picks: pd.DataFrame) -> pd.DataFrame:
     """One row per (account, bet) for the window. All accounts count equally.
 
@@ -96,7 +121,7 @@ def prepare(picks: pd.DataFrame) -> pd.DataFrame:
     """
     if picks.empty:
         return picks
-    df = canonicalize_players(picks).sort_values("created_at")
+    df = canonicalize_players(renormalize(picks)).sort_values("created_at")
     df["market"] = _market(df)
 
     sides = df[df["direction"] != 0].groupby(["handle", "market"])["direction"].nunique()
@@ -331,9 +356,16 @@ def build_report(picks: pd.DataFrame, tweets: pd.DataFrame, schedule: Schedule |
         df = attach_games(df, schedule, first, last)
     consensus = consensus_bets(df)
     players = player_consensus(df)
-    themes = team_themes(df) if not df.empty else pd.DataFrame()
-    summary = (consensus[consensus["accounts"] >= 2].drop(columns="bet_key").head(25)
-               if not consensus.empty else consensus)
+    # Games already played are settled; they shouldn't crowd out bets you can still make.
+    open_picks = df[df["game_status"].ne("Final")] if not df.empty else df
+    themes = team_themes(open_picks) if not open_picks.empty else pd.DataFrame()
+    if consensus.empty:
+        summary = settled = consensus
+    else:
+        shared = consensus[consensus["accounts"] >= 2].drop(columns="bet_key")
+        is_final = shared["game_status"].eq("Final")
+        summary = shared[~is_final].reset_index(drop=True)   # every shared bet still to be played
+        settled = shared[is_final].reset_index(drop=True)
     pick_cols = ["handle", "created_at", "league", "game_time_et", "game", "label", "line", "odds", "units", "times_posted",
                  "switched_side", "bet_type", "category", "player", "team", "stat", "stat_detail",
                  "side", "parlay_group", "snippet", "url"]
@@ -346,6 +378,7 @@ def build_report(picks: pd.DataFrame, tweets: pd.DataFrame, schedule: Schedule |
         "Team Themes": themes,
         "Players": players,
         "All Bets": consensus,
+        "Already Played": settled,
         "Conflicts": conflicts(df) if not df.empty else pd.DataFrame(),
         "Picks": df[pick_cols] if not df.empty else df,
         "Tweets": tweets,
@@ -354,7 +387,9 @@ def build_report(picks: pd.DataFrame, tweets: pd.DataFrame, schedule: Schedule |
 
 
 GUIDE = pd.DataFrame([
-    ("Top Consensus", "Bets that 2+ tracked accounts posted this week, most-shared first. Start with 'what_it_means'."),
+    ("Top Consensus", "Bets that 2+ tracked accounts posted this week on games NOT yet finished, most-shared first, then "
+                      "soonest game. Start with 'what_it_means'. Bets on finished games move to 'Already Played'."),
+    ("Already Played", "Shared bets whose game was Final when the report ran. Kept for reviewing how consensus did."),
     ("league", "Sport/league of the bet (NFL, NCAAF, MLB, WNBA, NHL, ...). Non-NFL bets are also tagged in 'bet', e.g. [MLB]."),
     ("game / game_time_et", "The matchup (away @ home) and start time in Eastern, looked up from ESPN's schedule using the "
                             "bet's team and the time it was posted. Blank if the team couldn't be matched or ESPN was unreachable."),
@@ -365,8 +400,11 @@ GUIDE = pd.DataFrame([
     ("repeat_posts", "Extra times the same accounts re-posted this bet. Repeats never add votes: one account = one vote."),
     ("category", "Stat group. Football: passing, receiving, rushing, scoring, defense. Other sports: batting, pitching, "
                  "rebounding, playmaking, shooting, goaltending, combo. 'other' = a market outside these lists; the bet name "
-                 "then shows the exact market in words (e.g. 'free throws made') and different 'other' markets are never merged."),
-    ("Team Themes", "NFL only. Net accounts on a team's pass-game overs (QB passing + receiving) vs run-game overs (rushing)."),
+                 "then shows the exact market in words (e.g. 'free throws made') and different 'other' markets are never merged. "
+                 "'unrecognized market (see snippet)' means neither the model nor the post text named the market; "
+                 "check the Picks sheet snippet."),
+    ("Team Themes", "NFL only, games not yet finished. Net accounts on a team's pass-game overs (QB passing + receiving) "
+                    "vs run-game overs (rushing)."),
     ("Players", "Every player any account touched, with over/under lean and conflict flag."),
     ("All Bets", "Every grouped bet, including ones only one account posted."),
     ("Conflicts", "Markets where tracked accounts are on opposite sides."),
