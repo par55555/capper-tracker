@@ -77,3 +77,33 @@ def test_week_validates_window(client):
     assert c.get("/api/week", params={"week": 5, "days": 7}).status_code == 400
     assert c.get("/api/week", params={"days": 0}).status_code == 400
     assert c.post("/api/runs", json={"command": "rm -rf"}).status_code == 422
+
+
+def test_placed_roundtrip_keeps_first_price(client):
+    c, _ = client
+    body = {"window": "week09", "bet_key": "prop|game|ceedee lamb|anytime_td|yes", "placed": True,
+            "label": "CeeDee Lamb anytime touchdown", "prob": 0.5, "cost": 0.51}
+    assert c.put("/api/placed", json=body).json()["placed"][0]["cost"] == 0.51
+    # pressing again later doesn't overwrite the price you got
+    again = c.put("/api/placed", json={**body, "prob": 0.6, "cost": 0.61}).json()["placed"]
+    assert len(again) == 1 and again[0]["cost"] == 0.51
+    assert c.get("/api/placed", params={"window": "week09"}).json()["placed"][0]["label"] == body["label"]
+    assert c.put("/api/placed", json={**body, "placed": False}).json()["placed"] == []
+    assert c.put("/api/placed", json={**body, "window": "'; drop table"}).status_code == 422
+
+
+def test_live_quotes_filters_tickers(client, monkeypatch):
+    c, _ = client
+    seen = {}
+
+    class FakeKalshi:
+        def quotes(self, tickers):
+            seen["tickers"] = tickers
+            return {t: {"yes_bid": 0.5, "yes_ask": 0.51, "last": 0.51, "status": "active", "result": "", "volume": 1}
+                    for t in tickers}
+    monkeypatch.setattr(api, "_quote_client", FakeKalshi())
+    api._quote_cache.clear()
+    r = c.get("/api/live/quotes", params={"tickers": "KXNFLGAME-26NOV08DALIND-IND,not a ticker,../etc"}).json()
+    assert seen["tickers"] == ["KXNFLGAME-26NOV08DALIND-IND"]
+    assert r["quotes"]["KXNFLGAME-26NOV08DALIND-IND"]["yes_ask"] == 0.51
+    assert c.get("/api/live/quotes").json()["quotes"] == {}

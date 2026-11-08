@@ -34,7 +34,7 @@ LOG = ROOT / "logs" / "run.log"
 _NFL = [
     (4, 19, 30),   # Thu 7:30pm   before Thursday Night Football
     (0, 8, 45),    # Sun 8:45am   before London games; catches the overnight/early-morning posts
-    (0, 12, 15),   # Sun 12:15pm  before the 1:00 games
+    (0, 12, 30),   # Sun 12:30pm  30 min before the 1:00 games (all their picks are up by ~11am)
     (0, 15, 30),   # Sun 3:30pm   before the 4:05 / 4:25 games
     (0, 19, 30),   # Sun 7:30pm   before Sunday Night Football
     (1, 19, 30),   # Mon 7:30pm   before Monday Night Football

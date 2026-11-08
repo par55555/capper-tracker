@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db, pipeline, results, trends
+from . import db, kalshi, pipeline, results, trends
 from .config import ACCOUNTS_FILE, EXPORT_DIR, ROOT, TZ, current_week, lookback, nfl_week_to_date
 from concurrent.futures import ThreadPoolExecutor
 
@@ -96,7 +96,89 @@ def weeks():
         ).fetchall()
     finally:
         conn.close()
-    return {"current_week": current_week(), "weeks": [dict(r) for r in rows]}
+    return {"current_week": current_week(), "weeks": [dict(r) for r in rows],
+            "next_pull": _next_pull()}
+
+
+def _next_pull() -> str | None:
+    """Next time the *installed* scheduled job will pull (ET, ISO), read from its launchd plist."""
+    import plistlib
+    from .schedule import PLIST
+    try:
+        SCHEDULE = plistlib.loads(PLIST.read_bytes()).get("StartCalendarInterval") or []
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return None
+    now = datetime.now(TZ)
+    best = None
+    for slot in SCHEDULE:
+        days_ahead = ((slot["Weekday"] - 1) % 7 - now.weekday()) % 7  # launchd 0=Sun; Python 0=Mon
+        t = (now + timedelta(days=days_ahead)).replace(hour=slot["Hour"], minute=slot["Minute"], second=0, microsecond=0)
+        if t <= now:
+            t += timedelta(days=7)
+        best = t if best is None or t < best else best
+    return best.isoformat() if best else None
+
+
+# --- live prices & placed bets ------------------------------------------------
+
+_quote_client = None
+_quote_cache: dict = {}
+_quote_lock = threading.Lock()
+QUOTE_TTL_SECONDS = 3
+
+
+@app.get("/api/live/quotes")
+def live_quotes(tickers: str = Query("", max_length=20000)):
+    """Current Kalshi bid/ask/last for the given market tickers (comma-separated). The Live page
+    polls this every few seconds; one Kalshi request covers 50 markets in ~50 ms."""
+    global _quote_client
+    want = sorted({t.strip() for t in tickers.split(",") if re.match(r"^KX[A-Z0-9.-]{3,80}$", t.strip())})[:400]
+    if not want:
+        return {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "quotes": {}}
+    key = tuple(want)
+    with _quote_lock:
+        hit = _quote_cache.get(key)
+        if hit and time.time() - hit[0] < QUOTE_TTL_SECONDS:
+            return hit[1]
+        if _quote_client is None:
+            _quote_client = kalshi.Kalshi(cache_dir=None, min_interval=0.02)
+    try:
+        q = _quote_client.quotes(want)
+    except Exception as e:  # Kalshi hiccup: the page keeps its last prices
+        raise HTTPException(502, f"Kalshi unavailable: {e}")
+    body = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "quotes": q}
+    with _quote_lock:
+        _quote_cache.clear()
+        _quote_cache[key] = (time.time(), body)
+    return body
+
+
+class PlacedIn(BaseModel):
+    window: str = Field(..., pattern=r"^(week\d{2}|last\d{1,2}d)$")
+    bet_key: str = Field(..., min_length=1, max_length=300)
+    placed: bool
+    label: str | None = Field(None, max_length=300)
+    prob: float | None = Field(None, ge=0, le=1)
+    cost: float | None = Field(None, ge=0, le=1)
+
+
+@app.get("/api/placed")
+def get_placed(window: str = Query(..., pattern=r"^(week\d{2}|last\d{1,2}d)$")):
+    conn = db.connect()
+    try:
+        return {"placed": db.placed_bets(conn, window)}
+    finally:
+        conn.close()
+
+
+@app.put("/api/placed")
+def put_placed(body: PlacedIn):
+    conn = db.connect()
+    try:
+        db.set_placed(conn, body.window, body.bet_key, body.placed, body.label, body.prob, body.cost)
+        return {"placed": db.placed_bets(conn, body.window)}
+    finally:
+        conn.close()
 
 
 LIVE_TTL_SECONDS = 120   # the current week: Kalshi prices and game status move

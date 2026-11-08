@@ -91,3 +91,21 @@ export interface ExportFile {
   size: number;
   modified: string;
 }
+
+export interface Quote {
+  yes_bid: number | null;
+  yes_ask: number | null;
+  last: number | null;
+  status: string;
+  result: string;
+  volume: number | null;
+}
+
+export interface PlacedBet {
+  window: string;
+  bet_key: string;
+  label: string | null;
+  placed_at: string;
+  prob: number | null;
+  cost: number | null;
+}

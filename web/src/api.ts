@@ -1,4 +1,4 @@
-import type { Account, ExportFile, Run, Scope, TrendsReport, WeekInfo, WeekPayload } from "./types";
+import type { Account, ExportFile, PlacedBet, Quote, Run, Scope, TrendsReport, WeekInfo, WeekPayload } from "./types";
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -21,7 +21,12 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 const scopeQuery = (s: Scope) => (s.kind === "week" ? `week=${s.week}` : `days=${s.days}`);
 
 export const api = {
-  weeks: () => call<{ current_week: number; weeks: WeekInfo[] }>("/api/weeks"),
+  weeks: () => call<{ current_week: number; weeks: WeekInfo[]; next_pull: string | null }>("/api/weeks"),
+  quotes: (tickers: string[]) =>
+    call<{ at: string; quotes: Record<string, Quote> }>(`/api/live/quotes?tickers=${encodeURIComponent(tickers.join(","))}`),
+  placed: (window: string) => call<{ placed: PlacedBet[] }>(`/api/placed?window=${window}`),
+  setPlaced: (body: { window: string; bet_key: string; placed: boolean; label?: string; prob?: number | null; cost?: number | null }) =>
+    call<{ placed: PlacedBet[] }>("/api/placed", { method: "PUT", body: JSON.stringify(body) }),
   /** No scope = this NFL week so far (the Live page). */
   week: (s: Scope | null, refresh = false) => {
     const q = [s ? scopeQuery(s) : "", refresh ? "refresh=true" : ""].filter(Boolean).join("&");

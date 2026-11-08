@@ -8,6 +8,7 @@ import { Control } from "./views/Control";
 import { Results } from "./views/Results";
 import { AllBets, Conflicts, Guide, Picks, Players, Posts, Themes } from "./views/Tables";
 import { Trends } from "./views/Trends";
+import { LiveBoard } from "./views/LiveBoard";
 
 type Section = "live" | "history" | "analysis" | "manage";
 const SECTIONS: { id: Section; label: string }[] = [
@@ -21,7 +22,6 @@ const WEEK_TABS = {
   conflicts: "Conflicts", picks: "Picks", posts: "Posts", downloads: "Excel files",
 } as const;
 type WeekTab = keyof typeof WEEK_TABS;
-const LIVE_TABS: WeekTab[] = ["consensus", "bets", "players", "themes", "conflicts", "picks", "posts"];
 const HISTORY_TABS: WeekTab[] = ["results", "consensus", "bets", "players", "themes", "conflicts", "picks", "posts", "downloads"];
 const LIVE_REFRESH_MS = 120_000;
 
@@ -36,6 +36,7 @@ function readRoute(): Route {
   const parts = location.hash.replace(/^#\/?/, "").split("/");
   const section = (["live", "history", "analysis", "manage"].includes(parts[0]) ? parts[0] : "live") as Section;
   if (section === "history") return { section, scope: parts[1] || null, tab: parts[2] || null };
+  if (section === "live") return { section, scope: parts[1] || null, tab: null };  // #/live/w6 = preview a past week
   return { section, scope: null, tab: parts[1] || null };
 }
 
@@ -121,7 +122,8 @@ function Downloads({ week }: { week: number | null }) {
 export default function App() {
   const initial = readRoute();
   const [section, setSection] = useState<Section>(initial.section);
-  const [liveTab, setLiveTab] = useState<WeekTab>(initial.section === "live" && LIVE_TABS.includes(initial.tab as WeekTab) ? initial.tab as WeekTab : "consensus");
+  const [preview] = useState<Scope | null>(initial.section === "live" ? parseScope(initial.scope ?? undefined) : null);
+  const [nextPull, setNextPull] = useState<string | null>(null);
   const [histTab, setHistTab] = useState<WeekTab>(initial.section === "history" && HISTORY_TABS.includes(initial.tab as WeekTab) ? initial.tab as WeekTab : "results");
   const [histScope, setHistScope] = useState<Scope | null>(parseScope(initial.scope ?? undefined));
   const [weeks, setWeeks] = useState<WeekInfo[]>([]);
@@ -140,23 +142,28 @@ export default function App() {
   }, []);
 
   const loadWeeks = useCallback(() => api.weeks().then((w) => {
-    setWeeks(w.weeks); setCurrentWeek(w.current_week);
+    setWeeks(w.weeks); setCurrentWeek(w.current_week); setNextPull(w.next_pull);
   }).catch((e) => setError(e.message)), []);
-  const loadLive = useCallback((refresh = false) => guard("live", async () => setLive(await api.week(null, refresh))), [guard]);
+  const loadLive = useCallback((refresh = false) => guard("live", async () => setLive(await api.week(preview, refresh))), [guard, preview]);
   const loadHist = useCallback((s: Scope, refresh = false) =>
     guard(`h:${scopeKey(s)}`, async () => { const d = await api.week(s, refresh); setHist((h) => ({ ...h, [scopeKey(s)]: d })); }), [guard]);
   const loadTrends = useCallback((refresh = false) => guard("trends", async () => setTrends(await api.trends(refresh))), [guard]);
 
   useEffect(() => { loadWeeks(); }, [loadWeeks]);
 
-  // History defaults to the most recent finished week that has picks.
-  const pastWeeks = useMemo(() => weeks.filter((w) => currentWeek == null || w.week < currentWeek), [weeks, currentWeek]);
+  // History covers every week, this one included; it opens on the latest week that has picks.
+  const histWeeks = useMemo(() => {
+    const ws = [...weeks];
+    if (currentWeek != null && !ws.some((w) => w.week === currentWeek))
+      ws.unshift({ week: currentWeek, posts: 0, extracted: 0, failed: 0, pending: 0, picks: 0 });
+    return ws.sort((a, b) => b.week - a.week);
+  }, [weeks, currentWeek]);
   useEffect(() => {
-    if (!histScope && weeks.length) {
-      const w = pastWeeks.find((x) => x.picks > 0) ?? pastWeeks[0] ?? weeks[0];
+    if (!histScope && histWeeks.length) {
+      const w = histWeeks.find((x) => x.picks > 0) ?? histWeeks[0];
       if (w) setHistScope({ kind: "week", week: w.week });
     }
-  }, [histScope, weeks, pastWeeks]);
+  }, [histScope, histWeeks]);
 
   // Load what the visible section needs (once; Refresh reloads).
   useEffect(() => {
@@ -175,9 +182,9 @@ export default function App() {
   // URL mirrors where you are, so reloads and links keep your place.
   useEffect(() => {
     const h = section === "history" ? `#/history/${histScope ? scopeKey(histScope) : ""}/${histTab}`
-      : section === "live" ? `#/live/${liveTab}` : `#/${section}`;
+      : section === "live" ? `#/live${preview ? `/${scopeKey(preview)}` : ""}` : `#/${section}`;
     history.replaceState(null, "", h);
-  }, [section, histScope, histTab, liveTab]);
+  }, [section, histScope, histTab, preview]);
 
   const refresh = () => {
     if (section === "live") loadLive(true);
@@ -194,7 +201,8 @@ export default function App() {
   const builtAt = section === "live" ? live?.built_at : section === "history" ? histData?.built_at : section === "analysis" ? trends?.built_at : undefined;
 
   const scopeOptions = [
-    ...pastWeeks.map((w) => ({ key: `w${w.week}`, label: `Week ${w.week}${w.picks ? "" : " (no picks)"}` })),
+    ...histWeeks.map((w) => ({ key: `w${w.week}`,
+      label: `Week ${w.week}${w.week === currentWeek ? " · this week" : ""}${w.picks ? "" : " (no picks)"}` })),
     { key: "d7", label: "Last 7 days" }, { key: "d14", label: "Last 14 days" }, { key: "d30", label: "Last 30 days" },
   ];
   const liveWeek = live ? live.window.name.replace(/^week0?/, "") : null;
@@ -207,7 +215,7 @@ export default function App() {
           <div>
             <div className="brand-name">Capper Tracker</div>
             <div className="brand-sub muted">
-              {section === "live" && (live ? `Week ${liveWeek} so far · prices refresh every 2 min` : "Loading…")}
+              {section === "live" && (live ? `Week ${liveWeek} · upcoming games` : "Loading…")}
               {section === "history" && (histData?.window.label ?? "Pick a week")}
               {section === "analysis" && (trends ? `All weeks with picks (${trends.weeks[0]}–${trends.weeks[trends.weeks.length - 1]})` : "Loading…")}
               {section === "manage" && "Runs, tracked accounts and definitions"}
@@ -240,10 +248,10 @@ export default function App() {
 
       <main className={activeLoading && builtAt ? "dim" : undefined}>
         {section === "live" && (live
-          ? <WeekTabs data={live} tabs={LIVE_TABS} tab={liveTab} setTab={setLiveTab} live exportsFor={null} goManage={() => setSection("manage")} />
-          : <Loading what="this week's picks and live Kalshi prices" busy={!!loading.live} />)}
+          ? <LiveBoard data={live} nextPull={nextPull} preview={!!preview} />
+          : <Loading what="this week's bets and Kalshi prices" busy={!!loading.live} />)}
         {section === "history" && (histData
-          ? <WeekTabs data={histData} tabs={HISTORY_TABS} tab={histTab} setTab={setHistTab} live={false}
+          ? <WeekTabs data={histData} tabs={HISTORY_TABS} tab={histTab} setTab={setHistTab} live={histData.window.live}
                       exportsFor={histScope?.kind === "week" ? histScope.week : null} goManage={() => setSection("manage")} />
           : <Loading what="that week, its results and Kalshi prices" busy={!!loading[`h:${histKey}`]} />)}
         {section === "analysis" && (trends ? <Trends data={trends} /> : <Loading what="every week's results and Kalshi prices" busy={!!loading.trends} slow />)}

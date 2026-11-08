@@ -65,6 +65,16 @@ CREATE TABLE IF NOT EXISTS picks (
     extracted_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_picks_week ON picks(nfl_week, bet_key);
+
+CREATE TABLE IF NOT EXISTS placed (           -- bets you marked "Placed" on the Live page
+    window     TEXT NOT NULL,                  -- e.g. week09
+    bet_key    TEXT NOT NULL,
+    label      TEXT,
+    placed_at  TEXT NOT NULL,                  -- ISO8601 UTC
+    prob       REAL,                           -- Kalshi probability for your side when you placed it
+    cost       REAL,                           -- Kalshi price you could buy it at then
+    PRIMARY KEY (window, bet_key)
+);
 """
 
 PICK_COLUMNS = [
@@ -204,6 +214,24 @@ def mark_failed(conn: sqlite3.Connection, tweet_id: str, error: str) -> None:
             "UPDATE tweets SET extracted = -1, extract_error = ? WHERE tweet_id = ?",
             (error[:500], tweet_id),
         )
+
+
+# --- placed bets --------------------------------------------------------------
+
+def placed_bets(conn: sqlite3.Connection, window: str) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT * FROM placed WHERE window = ? ORDER BY placed_at", (window,))]
+
+
+def set_placed(conn: sqlite3.Connection, window: str, bet_key: str, placed: bool, label: str | None = None,
+               prob: float | None = None, cost: float | None = None) -> None:
+    with conn:
+        if placed:
+            conn.execute(
+                """INSERT INTO placed(window, bet_key, label, placed_at, prob, cost) VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(window, bet_key) DO NOTHING""",  # keep the original time and price
+                (window, bet_key, label, _now(), prob, cost))
+        else:
+            conn.execute("DELETE FROM placed WHERE window = ? AND bet_key = ?", (window, bet_key))
 
 
 # --- reads for analysis -----------------------------------------------------

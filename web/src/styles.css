@@ -408,3 +408,75 @@ table.heat td { border: 0; padding: 0; }
 .dot-key.ring { border: 2px solid var(--muted); }
 .dot-key.fill { background: var(--series-1); }
 @media (max-width: 600px) { .dot-row { grid-template-columns: 80px 1fr 70px; gap: 8px; } .dot-row .hbar-value .small { display: none; } }
+
+/* --- Live board (tiles) --- */
+:root { --placed: #2a78d6; --placed-soft: rgba(42, 120, 214, 0.12); }
+@media (prefers-color-scheme: dark) { :root { --placed: #3987e5; --placed-soft: rgba(57, 135, 229, 0.16); } }
+
+.live { display: flex; flex-direction: column; gap: 22px; }
+.live-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: transparent; color: var(--muted); padding: 5px 13px; border-radius: 999px; cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.seg button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.live-status { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+.live-status.err { color: var(--warn); }
+.live-note { margin: -8px 0 0; font-size: 12px; color: var(--warn); }
+.live-empty { text-align: center; padding: 70px 20px; border: 1px dashed var(--border); border-radius: 14px; }
+.live-empty h2 { font-size: 18px; margin-bottom: 6px; }
+
+.game-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.game-head h2 { font-size: 17px; letter-spacing: -0.2px; }
+.game-head .muted { font-size: 13px; }
+.game-cd { font-size: 12px; font-weight: 700; color: var(--muted); background: var(--surface-2); padding: 2px 9px; border-radius: 999px; }
+.game-cd.live { color: #fff; background: var(--live); }
+
+/* Games flow into columns like a sportsbook board; a game's tiles stay together. */
+.games { columns: 3 340px; column-gap: 20px; }
+.game { break-inside: avoid; margin-bottom: 22px; display: block; }
+.tiles { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.tile { position: relative; display: flex; flex-direction: column; gap: 6px; background: var(--surface); border: 1px solid var(--border);
+        border-radius: 14px; padding: 14px; box-shadow: var(--shadow); }
+.tile:hover { border-color: color-mix(in srgb, var(--text) 25%, var(--border)); }
+.tile.placed { border-color: var(--placed); box-shadow: 0 0 0 1px var(--placed), 0 0 0 5px var(--placed-soft); }
+.tile.started { opacity: 0.8; }
+.tile-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.tile-accounts { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.tile-accounts b { color: var(--text); font-size: 13px; }
+.avatars { display: inline-flex; }
+.avatars i { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-size: 10px; font-weight: 700;
+             background: var(--surface-2); color: var(--text); border: 2px solid var(--surface); margin-left: -6px; }
+.avatars i:first-child { margin-left: 0; }
+.avatars i.more { font-size: 9px; color: var(--muted); }
+.tile-move { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; }
+.tile-move.up { color: var(--pos); background: var(--pos-soft); }
+.tile-move.down { color: var(--neg); background: var(--neg-soft); }
+.tile-title { font-size: 15px; font-weight: 700; line-height: 1.25; letter-spacing: -0.1px; }
+.tile-market { margin: 0; font-size: 12px; color: var(--muted); min-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tile-actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 6px; align-items: stretch; }
+.odds-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 8px 6px;
+            border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); font-variant-numeric: tabular-nums;
+            transition: background-color .4s, border-color .4s; }
+.odds-side { font-size: 11px; font-weight: 600; color: var(--muted); }
+.odds-main { font-size: 20px; font-weight: 800; letter-spacing: -0.4px; line-height: 1.1; }
+.odds-us { font-size: 11px; color: var(--muted); min-height: 14px; }
+.odds-btn.off .odds-main { color: var(--muted); }
+.odds-btn.flash-up { background: var(--pos-soft); border-color: var(--pos); }
+.odds-btn.flash-up .odds-main { color: var(--pos); }
+.odds-btn.flash-down { background: var(--neg-soft); border-color: var(--neg); }
+.odds-btn.flash-down .odds-main { color: var(--neg); }
+
+.placed-btn { border: 1.5px solid var(--border); background: transparent; color: var(--text); border-radius: 10px; padding: 0 14px;
+              font-weight: 700; font-size: 13px; cursor: pointer; min-width: 92px; transition: transform .08s; }
+.placed-btn:hover { border-color: var(--placed); color: var(--placed); }
+.placed-btn:active { transform: scale(0.96); }
+.placed-btn.on { background: var(--placed); border-color: var(--placed); color: #fff; box-shadow: inset 0 2px 4px rgba(0,0,0,.25); }
+.placed-btn.on span { font-weight: 500; opacity: 0.9; display: block; font-size: 11px; }
+.tile-since { margin: 0; font-size: 11px; font-weight: 600; }
+.tile-since.up { color: var(--pos); }
+.tile-since.down { color: var(--neg); }
+
+@media (max-width: 600px) {
+  .games { columns: 1; }
+  .live-status { margin-left: 0; width: 100%; }
+}

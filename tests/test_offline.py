@@ -236,7 +236,7 @@ def test_schedule_plist():
     times = {(d["Weekday"], d["Hour"], d["Minute"]) for d in plist["StartCalendarInterval"]}
     # Every NFL slot gets a pull shortly before kickoff (Thu/Sun/Mon night, Sun 1pm + 4pm), plus
     # an evening pull every day for basketball/hockey and Saturday college windows.
-    assert {(4, 19, 30), (0, 12, 15), (0, 15, 30), (0, 19, 30), (1, 19, 30), (6, 11, 15)} <= times
+    assert {(4, 19, 30), (0, 12, 30), (0, 15, 30), (0, 19, 30), (1, 19, 30), (6, 11, 15)} <= times
     assert {(d, 18, 30) for d in range(7)} <= times
     assert len(times) == len(plist["StartCalendarInterval"])  # no duplicates
 

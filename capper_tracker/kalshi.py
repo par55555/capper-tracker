@@ -137,6 +137,18 @@ class Kalshi:
         self._mem[key] = data
         return data
 
+    def quotes(self, tickers: list[str]) -> dict[str, dict]:
+        """Current bid/ask/last for many markets at once (one request per 50 tickers, ~50 ms each).
+        Never cached on disk: this is what the Live page polls every few seconds."""
+        out = {}
+        tickers = sorted({t for t in tickers if t})
+        for i in range(0, len(tickers), 50):
+            d = self._fetch("/markets", {"tickers": ",".join(tickers[i:i + 50]), "limit": 50})
+            for m in d.get("markets") or []:
+                s = _slim_market(m)
+                out[s["ticker"]] = {k: s[k] for k in ("yes_bid", "yes_ask", "last", "status", "result", "volume")}
+        return out
+
     def game_events(self, league: str, since: datetime) -> list[dict]:
         """Every game event in the league's GAME series from `since` on (newest first in the API)."""
         series = LEAGUE_PREFIX[league] + "GAME"
@@ -616,7 +628,7 @@ def _price_one(client: Kalshi, m: dict | None, side: str | None, posted_at, game
 
 KALSHI_COLUMNS = ["kalshi_ticker", "kalshi_title", "kalshi_side", "kalshi_match", "kalshi_note",
                   "kalshi_prob_post", "kalshi_cost_post", "kalshi_prob_close", "kalshi_prob_now",
-                  "kalshi_cost_now", "kalshi_opened_late", "kalshi_result"]
+                  "kalshi_cost_now", "kalshi_opened_late", "kalshi_result", "kalshi_ticker2", "kalshi_weight"]
 
 
 def _settled(hit: dict) -> str | None:
@@ -652,7 +664,9 @@ def attach_prices(df: pd.DataFrame, schedule, client: Kalshi | None = None, sinc
             hit = matcher.match(r)
             return {**{k: v for k, v in hit.items() if not k.startswith("_")},
                     **price_pick(client, hit, r.get("created_at"), r.get("game_time_et")),
-                    "kalshi_result": _settled(hit)}
+                    "kalshi_result": _settled(hit),
+                    "kalshi_ticker2": (hit.get("_market2") or {}).get("ticker"),
+                    "kalshi_weight": hit.get("_weight")}
         except Exception as e:  # one bad lookup never breaks the page
             log.warning("Kalshi lookup failed for %s: %s", r.get("label"), e)
             return {**_miss(f"Kalshi lookup failed: {e}"), "_market": None}
@@ -670,7 +684,8 @@ def bet_summary(g: pd.DataFrame) -> pd.DataFrame:
     """One row per bet_key: the Kalshi market most of its accounts' lines map to, the price at the
     first post, now, and just before the game, plus the average price accounts got."""
     cols = ["bet_key", "kalshi_title", "kalshi_match", "kalshi_first", "kalshi_now", "kalshi_close",
-            "kalshi_avg_post", "kalshi_priced"]
+            "kalshi_avg_post", "kalshi_priced", "kalshi_ticker", "kalshi_side", "kalshi_ticker2", "kalshi_weight",
+            "kalshi_cost_now"]
     if g.empty or "kalshi_ticker" not in g:
         return pd.DataFrame(columns=cols)
     p = g[g["kalshi_ticker"].notna()]
@@ -689,5 +704,10 @@ def bet_summary(g: pd.DataFrame) -> pd.DataFrame:
             "kalshi_close": main["kalshi_prob_close"].dropna().iat[-1] if main["kalshi_prob_close"].notna().any() else None,
             "kalshi_avg_post": round(float(grp["kalshi_prob_post"].mean()), 4) if grp["kalshi_prob_post"].notna().any() else None,
             "kalshi_priced": int(grp["kalshi_prob_post"].notna().sum()),
+            # the market to stream live prices from (and its pair, for lines estimated between two)
+            "kalshi_ticker": top, "kalshi_side": main["kalshi_side"].iat[0],
+            "kalshi_ticker2": main["kalshi_ticker2"].iat[0] if "kalshi_ticker2" in main else None,
+            "kalshi_weight": main["kalshi_weight"].iat[0] if "kalshi_weight" in main else None,
+            "kalshi_cost_now": main["kalshi_cost_now"].dropna().iat[-1] if main["kalshi_cost_now"].notna().any() else None,
         })
     return pd.DataFrame(rows, columns=cols)

@@ -35,8 +35,8 @@ The web app has three pages, switched at the top:
 
 | Page | What it's for |
 |---|---|
-| **Live** (front page) | **This week, right now.** Bets that 2+ accounts posted on games that haven't started, most-shared first, each with its **current Kalshi price** and how much it has moved since the first account posted it. Prices refresh every 2 minutes. Tabs for all bets, players, team themes, conflicts, raw picks and posts. |
-| **History** | **Any past week, broken out like the Excel reports.** Results (every bet marked Won/Lost with what actually happened and what the market gave it), plus consensus, all bets, players, team themes, conflicts, picks, posts, and the saved Excel files to download. |
+| **Live** (front page) | **Bets for games that haven't started, as betting tiles.** Grouped by game with a kickoff countdown; each tile shows how many accounts are on it, the matching Kalshi market, its **live price** (as a % chance, the cost in cents, and the equivalent sportsbook odds like +150), and how far it has moved since the first account posted it. Prices update every 5 seconds and flash green/red when they move. Press **Placed** on a tile to mark a bet you've made: it's outlined in blue, remembers the price you got, and shows how the price has moved since. Filter by 2+ accounts / all picks / placed, and by league. |
+| **History** | **Any week (this one included), broken out like the Excel reports.** Results (every bet marked Won/Lost with what actually happened and what the market gave it), plus consensus, all bets, players, team themes, conflicts, picks, posts, and the saved Excel files to download. |
 | **Analysis** | **What's working, across every week.** Who beats the market (not just who hits), whether agreement between accounts beats the price, favorites vs. long shots, which markets hit, week-by-week trends, and hot/cold streaks. |
 
 The ⚙ button opens **Manage**: run the update with a button, add or remove tracked accounts, and a guide to every term.
@@ -179,7 +179,7 @@ Run `install` with your `capper` environment active; the schedule uses that envi
 | When | Why |
 |---|---|
 | Thu 7:30pm | Thursday Night Football |
-| Sun 8:45am, 12:15pm, 3:30pm, 7:30pm | London game, 1pm, 4pm and Sunday night games |
+| Sun 8:45am, 12:30pm, 3:30pm, 7:30pm | London game, 1pm, 4pm and Sunday night games |
 | Mon 7:30pm | Monday Night Football |
 | Sat 11:15am, 3:00pm | College football noon and afternoon kickoffs |
 | Weekdays 12:30pm, every day 6:30pm | NBA / NHL / MLB slates |
