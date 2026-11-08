@@ -234,11 +234,8 @@ def test_schedule_plist():
     plist = schedule.build_plist("/opt/py/bin/python")
     assert plist["ProgramArguments"] == ["/opt/py/bin/python", "-m", "capper_tracker", "run", "--notify"]
     times = {(d["Weekday"], d["Hour"], d["Minute"]) for d in plist["StartCalendarInterval"]}
-    # Every NFL slot gets a pull shortly before kickoff (Thu/Sun/Mon night, Sun 1pm + 4pm), plus
-    # an evening pull every day for basketball/hockey and Saturday college windows.
-    assert {(4, 19, 30), (0, 12, 30), (0, 15, 30), (0, 19, 30), (1, 19, 30), (6, 11, 15)} <= times
-    assert {(d, 18, 30) for d in range(7)} <= times
-    assert len(times) == len(plist["StartCalendarInterval"])  # no duplicates
+    # Thursdays and Sundays only, ~30 min before each NFL kickoff slot
+    assert times == {(4, 19, 45), (0, 9, 0), (0, 12, 30), (0, 15, 35), (0, 19, 50)}
 
 
 def test_notify_quoting_is_safe():
@@ -439,18 +436,6 @@ def test_fetch_respects_max_posts(conn, tmp_path):
     stats = pipeline.fetch(conn, StubX(), WINDOW, accounts_file=accounts, max_tweets=5)
     assert asked == [5, 5]
     assert stats["new_posts"] == 7 and stats["capped_accounts"] == ["sharp_sam"]
-
-
-def test_sunday_quick_pulls_plist():
-    from capper_tracker import schedule
-    quick = schedule.build_quick_plist("/opt/py/bin/python")
-    assert quick["ProgramArguments"][-4:] == ["--notify", "--no-excel", "--max-posts", "5"]
-    q = {(d["Weekday"], d["Hour"], d["Minute"]) for d in quick["StartCalendarInterval"]}
-    main = {(d["Weekday"], d["Hour"], d["Minute"]) for d in schedule.build_plist()["StartCalendarInterval"]}
-    assert all(d == 0 for d, _, _ in q)                       # Sundays only
-    assert (0, 7, 0) in q and (0, 20, 15) in q and (0, 20, 30) not in q
-    assert not q & main                                       # never at the same minute as a main pull
-    assert len(q | {t for t in main if t[0] == 0 and (7, 0) <= t[1:] <= (20, 15)}) == 54  # every 15 min
 
 
 def test_cli_cap_bounds_and_run_lock(tmp_path):

@@ -166,7 +166,7 @@ Each run also saves a spreadsheet. The newest one is always at `exports/latest_c
 ### Run it automatically (Mac)
 
 ```bash
-python -m capper_tracker.schedule install    # game-window pulls + Sunday every-15-minute quick pulls
+python -m capper_tracker.schedule install    # Thu + Sun, 30 min before each NFL kickoff slot
 python -m capper_tracker.schedule run-now    # try it once right now
 python -m capper_tracker.schedule status     # did the last one work?
 python -m capper_tracker.schedule uninstall  # turn it off
@@ -174,23 +174,20 @@ python -m capper_tracker.schedule uninstall  # turn it off
 
 Run `install` with your `capper` environment active; the schedule uses that environment.
 
-**When it runs (Eastern time), and why.** Most picks go up 1–8 hours before their game. NFL picks cluster on Sunday morning; NBA and NHL picks around 9–10am and 5–6pm. So the pulls are timed just before each slate:
+**When it runs (Eastern time).** Thursdays and Sundays only, about 30 minutes before each NFL kickoff slot, so the Live page has the picks and current Kalshi prices just before you'd bet:
 
-| When | Why |
+| Pull | Kickoff it's for |
 |---|---|
-| Thu 7:30pm | Thursday Night Football |
-| Sun 8:45am, 12:30pm, 3:30pm, 7:30pm | London game, 1pm, 4pm and Sunday night games |
-| Mon 7:30pm | Monday Night Football |
-| Sat 11:15am, 3:00pm | College football noon and afternoon kickoffs |
-| Weekdays 12:30pm, every day 6:30pm | NBA / NHL / MLB slates |
-| **Sundays every 15 min, 7:00am–8:15pm** | **Quick pulls** so new NFL picks reach the Live page within ~15 minutes |
+| Thu 7:45pm | Thursday Night Football (8:15) |
+| Sun 9:00am | London game (9:30) |
+| Sun 12:30pm | 1:00 games |
+| Sun 3:35pm | 4:05 / 4:25 games |
+| Sun 7:50pm | Sunday Night Football (8:20) |
 
-**Sunday quick pulls** are a second, lighter job. Each one asks every account for at most **5 new posts** (only posts since the last pull are ever requested) and skips the Excel file, since the Live page reads the database directly. In weeks 4–7 no account posted more than 5 times in any 15-minute window on a Sunday, so the cap skips nothing. A lock makes sure two pulls never overlap; if one runs long, the next simply skips. You can run one by hand with `python -m capper_tracker run --max-posts 5 --no-excel`.
-
-Replaying every stored pick against this schedule, **83% of picks (91% of NFL picks) are collected before their game starts**, compared with 37% (62% NFL) for a twice-a-week schedule. More pulls barely change the cost: X bills per new post, and each run only asks for posts since the last one.
+Replaying weeks 4–7, this collects **85% of NFL picks before their game**: Sunday 1pm and 4pm games 100%, London 95%, Sunday night 91%, Thursday night 88%. Monday night games only get picks already posted by Sunday's 7:50pm pull (13%), and other sports (college, NBA, NHL) aren't covered. To catch those, run a pull by hand from ⚙ Manage, or add times to `SCHEDULE` in `capper_tracker/schedule.py`. Each run only asks X for posts since the last one.
 
 - **Notifications** only appear when a *new* shared bet shows up, or when something fails (including posts that couldn't be read, e.g. an expired API key).
-- If the Mac is **asleep** at a scheduled time, that run happens when it wakes. If it's **shut down**, the run is skipped. For game days, keep it plugged in and awake.
+- If the Mac is **asleep** at a scheduled time, that run happens when it wakes. If it's **shut down**, the run is skipped. On Thursdays and Sundays, keep it plugged in and awake.
 - Not seeing notifications? System Settings → Notifications → allow **Script Editor**.
 - On Linux, use cron with the same times, running `python -m capper_tracker run`.
 
