@@ -166,7 +166,7 @@ Each run also saves a spreadsheet. The newest one is always at `exports/latest_c
 ### Run it automatically (Mac)
 
 ```bash
-python -m capper_tracker.schedule install    # ~20 times a week, timed around game windows
+python -m capper_tracker.schedule install    # game-window pulls + Sunday every-15-minute quick pulls
 python -m capper_tracker.schedule run-now    # try it once right now
 python -m capper_tracker.schedule status     # did the last one work?
 python -m capper_tracker.schedule uninstall  # turn it off
@@ -183,6 +183,9 @@ Run `install` with your `capper` environment active; the schedule uses that envi
 | Mon 7:30pm | Monday Night Football |
 | Sat 11:15am, 3:00pm | College football noon and afternoon kickoffs |
 | Weekdays 12:30pm, every day 6:30pm | NBA / NHL / MLB slates |
+| **Sundays every 15 min, 7:00am–8:15pm** | **Quick pulls** so new NFL picks reach the Live page within ~15 minutes |
+
+**Sunday quick pulls** are a second, lighter job. Each one asks every account for at most **5 new posts** (only posts since the last pull are ever requested) and skips the Excel file, since the Live page reads the database directly. In weeks 4–7 no account posted more than 5 times in any 15-minute window on a Sunday, so the cap skips nothing. A lock makes sure two pulls never overlap; if one runs long, the next simply skips. You can run one by hand with `python -m capper_tracker run --max-posts 5 --no-excel`.
 
 Replaying every stored pick against this schedule, **83% of picks (91% of NFL picks) are collected before their game starts**, compared with 37% (62% NFL) for a twice-a-week schedule. More pulls barely change the cost: X bills per new post, and each run only asks for posts since the last one.
 

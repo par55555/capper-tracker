@@ -1,6 +1,6 @@
-"""Install the weekly run as a macOS launchd job.
+"""Install the scheduled runs as macOS launchd jobs.
 
-    python -m capper_tracker.schedule install     # Thu 12:00 + Sun 11:00 local time
+    python -m capper_tracker.schedule install     # game-window pulls + Sunday every-15-min quick pulls
     python -m capper_tracker.schedule run-now     # trigger the scheduled job immediately (test)
     python -m capper_tracker.schedule status
     python -m capper_tracker.schedule uninstall
@@ -22,6 +22,8 @@ from .config import ROOT
 
 LABEL = "com.capper-tracker.weekly"
 PLIST = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+QUICK_LABEL = "com.capper-tracker.sunday-quick"
+QUICK_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{QUICK_LABEL}.plist"
 LOG = ROOT / "logs" / "run.log"
 
 # launchd weekdays: 0 = Sunday ... 6 = Saturday. Times are the Mac's local time (set for US Eastern).
@@ -44,13 +46,24 @@ _DAILY = [(d, 18, 30) for d in range(7)]                    # 6:30pm every day: 
 _MIDDAY = [(d, 12, 30) for d in (1, 2, 3, 4, 5)]            # 12:30pm weekdays: afternoon slates
 SCHEDULE = [{"Weekday": d, "Hour": h, "Minute": m} for d, h, m in _NFL + _COLLEGE + _DAILY + _MIDDAY]
 
+# Sunday quick pulls: every 15 minutes, 7:00am-8:15pm, so new picks reach the Live page within
+# ~15 minutes of being posted. Each asks every account for at most QUICK_MAX_POSTS new posts:
+# in weeks 4-7 no account ever posted more than 5 times in one 15-minute window on a Sunday, so
+# nothing is skipped (5 is also the smallest batch X returns). Times the main schedule already
+# covers are left out, and a run lock stops two pulls overlapping. No Excel file per quick pull.
+QUICK_MAX_POSTS = 5
+_MAIN_SUNDAY = {(h, m) for d, h, m in _NFL + _DAILY if d == 0}
+QUICK_SCHEDULE = [{"Weekday": 0, "Hour": h, "Minute": m}
+                  for h in range(7, 21) for m in (0, 15, 30, 45)
+                  if (h, m) <= (20, 15) and (h, m) not in _MAIN_SUNDAY]
 
-def build_plist(python: str = sys.executable) -> dict:
+
+def _plist(label: str, args: list[str], schedule: list[dict], python: str) -> dict:
     return {
-        "Label": LABEL,
-        "ProgramArguments": [python, "-m", "capper_tracker", "run", "--notify"],
+        "Label": label,
+        "ProgramArguments": [python, "-m", "capper_tracker", *args],
         "WorkingDirectory": str(ROOT),
-        "StartCalendarInterval": SCHEDULE,
+        "StartCalendarInterval": schedule,
         "StandardOutPath": str(LOG),
         "StandardErrorPath": str(LOG),
         "EnvironmentVariables": {
@@ -59,6 +72,18 @@ def build_plist(python: str = sys.executable) -> dict:
         },
         "ProcessType": "Background",
     }
+
+
+def build_plist(python: str = sys.executable) -> dict:
+    return _plist(LABEL, ["run", "--notify"], SCHEDULE, python)
+
+
+def build_quick_plist(python: str = sys.executable) -> dict:
+    return _plist(QUICK_LABEL, ["run", "--notify", "--no-excel", "--max-posts", str(QUICK_MAX_POSTS)],
+                  QUICK_SCHEDULE, python)
+
+
+JOBS = [(LABEL, PLIST, build_plist), (QUICK_LABEL, QUICK_PLIST, build_quick_plist)]
 
 
 def _launchctl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -72,21 +97,25 @@ def _domain() -> str:
 def install() -> None:
     LOG.parent.mkdir(parents=True, exist_ok=True)
     PLIST.parent.mkdir(parents=True, exist_ok=True)
-    _launchctl("bootout", f"{_domain()}/{LABEL}", check=False)  # replace any older version
-    with PLIST.open("wb") as f:
-        plistlib.dump(build_plist(), f)
-    _launchctl("bootstrap", _domain(), str(PLIST))
-    print(f"Installed {PLIST}")
-    print(f"Runs {len(SCHEDULE)} times a week around game windows (see SCHEDULE in schedule.py), "
-          f"using {sys.executable}")
+    for label, path, build in JOBS:
+        _launchctl("bootout", f"{_domain()}/{label}", check=False)  # replace any older version
+        with path.open("wb") as f:
+            plistlib.dump(build(), f)
+        _launchctl("bootstrap", _domain(), str(path))
+        print(f"Installed {path}")
+    print(f"Main pulls: {len(SCHEDULE)} a week around game windows. "
+          f"Sunday quick pulls: every 15 min, 7:00am-8:15pm ({len(QUICK_SCHEDULE)} runs, "
+          f"max {QUICK_MAX_POSTS} new posts per account each).")
+    print(f"Python: {sys.executable}")
     print("Notifications only appear when a new shared bet shows up, or when something fails.")
     print(f"Log: {LOG}   Latest report: {ROOT / 'exports' / 'latest_consensus.xlsx'}")
 
 
 def uninstall() -> None:
-    _launchctl("bootout", f"{_domain()}/{LABEL}", check=False)
-    PLIST.unlink(missing_ok=True)
-    print("Removed the scheduled job.")
+    for label, path, _ in JOBS:
+        _launchctl("bootout", f"{_domain()}/{label}", check=False)
+        path.unlink(missing_ok=True)
+    print("Removed the scheduled jobs.")
 
 
 def run_now() -> None:
@@ -95,13 +124,15 @@ def run_now() -> None:
 
 
 def status() -> None:
-    if not PLIST.exists():
-        print("Not installed.")
-        return
-    out = _launchctl("print", f"{_domain()}/{LABEL}", check=False)
-    keep = ("state =", "last exit code", "runs =")
-    lines = [ln.strip() for ln in out.stdout.splitlines() if ln.strip().startswith(keep)]
-    print("\n".join(lines) or out.stderr.strip() or "Installed (no runs yet).")
+    for label, path, _ in JOBS:
+        print(f"{label}:")
+        if not path.exists():
+            print("  Not installed.")
+            continue
+        out = _launchctl("print", f"{_domain()}/{label}", check=False)
+        keep = ("state =", "last exit code", "runs =")
+        lines = [ln.strip() for ln in out.stdout.splitlines() if ln.strip().startswith(keep)]
+        print("  " + ("\n  ".join(lines) or out.stderr.strip() or "Installed (no runs yet)."))
 
 
 def main() -> None:

@@ -417,3 +417,53 @@ def test_finished_games_leave_top_consensus():
     assert list(frames["Top Consensus"]["bet"]) == ["Jahmyr Gibbs anytime touchdown"]
     assert list(frames["Already Played"]["bet"]) == ["Chris Godwin over receiving yards"]
     assert "TB" not in set(frames["Team Themes"].get("team", []))   # finished game left out of themes
+
+
+def test_fetch_respects_max_posts(conn, tmp_path):
+    accounts = tmp_path / "accounts.txt"
+    accounts.write_text("sharp_sam\nprop_pete\n")
+    asked = []
+
+    class StubX:
+        estimated_cost = 0.0
+
+        def lookup_users(self, handles):
+            return {h: {"id": str(i), "name": h} for i, h in enumerate(handles, 1)}
+
+        def user_tweets(self, user_id, since_id, start_time, end_time, max_tweets):
+            asked.append(max_tweets)
+            n = 5 if user_id == "1" else 2           # sam is posting a lot, pete isn't
+            return [{"id": f"{user_id}{i:03d}", "created_at": ts(30 + i), "text": "x", "media_urls": []}
+                    for i in range(n)][:max_tweets]
+
+    stats = pipeline.fetch(conn, StubX(), WINDOW, accounts_file=accounts, max_tweets=5)
+    assert asked == [5, 5]
+    assert stats["new_posts"] == 7 and stats["capped_accounts"] == ["sharp_sam"]
+
+
+def test_sunday_quick_pulls_plist():
+    from capper_tracker import schedule
+    quick = schedule.build_quick_plist("/opt/py/bin/python")
+    assert quick["ProgramArguments"][-4:] == ["--notify", "--no-excel", "--max-posts", "5"]
+    q = {(d["Weekday"], d["Hour"], d["Minute"]) for d in quick["StartCalendarInterval"]}
+    main = {(d["Weekday"], d["Hour"], d["Minute"]) for d in schedule.build_plist()["StartCalendarInterval"]}
+    assert all(d == 0 for d, _, _ in q)                       # Sundays only
+    assert (0, 7, 0) in q and (0, 20, 15) in q and (0, 20, 30) not in q
+    assert not q & main                                       # never at the same minute as a main pull
+    assert len(q | {t for t in main if t[0] == 0 and (7, 0) <= t[1:] <= (20, 15)}) == 54  # every 15 min
+
+
+def test_cli_cap_bounds_and_run_lock(tmp_path):
+    import fcntl
+    import os
+    import subprocess
+    import sys
+    env = {**os.environ, "CAPPER_DB": str(tmp_path / "cappers.db")}
+    bad = subprocess.run([sys.executable, "-m", "capper_tracker", "report", "--max-posts", "3"],
+                         capture_output=True, text=True, env=env)
+    assert bad.returncode == 2 and "--max-posts" in bad.stderr
+    with open(tmp_path / ".run.lock", "w") as fh:            # another run holds the lock
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        r = subprocess.run([sys.executable, "-m", "capper_tracker", "report", "--no-excel"],
+                           capture_output=True, text=True, env=env)
+    assert r.returncode == 0 and "still in progress" in r.stdout

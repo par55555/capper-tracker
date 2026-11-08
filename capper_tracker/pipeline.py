@@ -36,8 +36,12 @@ def read_accounts_file(path: Path = ACCOUNTS_FILE) -> dict[str, float]:
     return entries
 
 
-def fetch(conn, x, window: Window, accounts_file: Path = ACCOUNTS_FILE) -> dict:
-    """Pull every active account's posts in the window into the DB."""
+def fetch(conn, x, window: Window, accounts_file: Path = ACCOUNTS_FILE,
+          max_tweets: int = MAX_TWEETS_PER_ACCOUNT) -> dict:
+    """Pull every active account's posts in the window into the DB.
+
+    Each account is asked only for posts newer than the last one stored, at most `max_tweets` of
+    them (the newest). Frequent small pulls (Sunday every 15 min) use a lower cap."""
     db.sync_account_list(conn, read_accounts_file(accounts_file))
     missing = db.accounts_missing_ids(conn)
     if missing:
@@ -60,11 +64,11 @@ def fetch(conn, x, window: Window, accounts_file: Path = ACCOUNTS_FILE) -> dict:
             since_id=since_id,
             start_time=window.start,
             end_time=None if live else window.end,
-            max_tweets=MAX_TWEETS_PER_ACCOUNT,
+            max_tweets=max_tweets,
         )
-        if len(tweets) >= MAX_TWEETS_PER_ACCOUNT:
+        if len(tweets) >= max_tweets:
             log.warning("@%s hit the %d-post cap; older posts in the window were skipped",
-                        acct["handle"], MAX_TWEETS_PER_ACCOUNT)
+                        acct["handle"], max_tweets)
             stats.setdefault("capped_accounts", []).append(acct["handle"])
         new = db.insert_tweets(conn, acct["handle"], tweets, nfl_week)
         if tweets:
