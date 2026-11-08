@@ -375,6 +375,24 @@ def cancel_run(run_id: str):
 
 # --- built front end --------------------------------------------------------
 
+_NOT_BUILT = """<!doctype html><meta charset="utf-8"><title>Capper Tracker</title>
+<body style="font:16px/1.5 -apple-system,sans-serif;max-width:620px;margin:60px auto;padding:0 16px">
+<h1>The web page hasn't been built yet</h1>
+<p>The server is running, but the page itself needs a one-time build. In a terminal, from the
+project folder:</p>
+<pre style="background:#f1f3f6;padding:12px;border-radius:8px">cd web
+npm install
+npm run build</pre>
+<p>Then stop this server (Ctrl+C), start it again and reload this page.</p>
+<p>The data API is already working: <a href="/api/docs">/api/docs</a></p></body>"""
+
+if not WEB_DIST.exists():
+    from fastapi.responses import HTMLResponse
+
+    @app.get("/", include_in_schema=False)
+    def not_built():
+        return HTMLResponse(_NOT_BUILT)
+
 if WEB_DIST.exists():
     app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
 

@@ -18,6 +18,10 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--reload", action="store_true", help="auto-reload on Python changes (dev)")
     args = ap.parse_args()
+    from .api import WEB_DIST
+    print(f"\n  Capper Tracker: open http://{args.host}:{args.port} in your browser  (Ctrl+C to stop)")
+    if not WEB_DIST.exists():
+        print("  Note: the web page isn't built yet. Run:  cd web && npm install && npm run build\n")
     uvicorn.run("capper_tracker.api:app", host=args.host, port=args.port, reload=args.reload)
 
 
