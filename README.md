@@ -151,6 +151,8 @@ On the **Run & accounts** tab, choose **Full run** and press **Start**. You'll s
 2. sends new posts to Claude to pull out the bets (costs money),
 3. rebuilds the report (free).
 
+![Run & accounts tab: start a run and manage tracked accounts](docs/images/run-accounts.png)
+
 Runs only pay for posts they haven't seen before, so running again later in the week is cheap. The other buttons do one step at a time, for example **Report only** to refresh the report for free.
 
 The same steps are available from Terminal:
