@@ -45,6 +45,25 @@ Each run sends a macOS notification with the headline numbers, the top shared be
 - First notification not appearing? System Settings → Notifications → allow **Script Editor** (macOS attributes `osascript` notifications to it).
 - On Linux, use cron instead: `0 12 * * 4` and `0 11 * * 0` running `python -m capper_tracker run`.
 
+## Web app
+
+A browser front end for the same data: the consensus as cards, sortable/searchable tables for every report sheet, a week picker, an accounts editor (writes `accounts.txt`), and buttons to start a run with a live log.
+
+```bash
+# one-time: Node lives in the capper env (conda install -n capper -c conda-forge nodejs)
+cd web && npm install && npm run build && cd ..
+
+python -m capper_tracker.server             # http://127.0.0.1:8000
+```
+
+**Results tab** grades each pick against ESPN box scores once its game is final: the record of shared (2+ account) bets vs. all picks, hit rate by how many accounts agreed, each bet's outcome with the actual stat ("74 rec yds", "2 TDs"), and a per-account leaderboard. Graded: NFL and college football player props (yards, receptions, TDs, anytime/2+/first TD, ...), plus moneylines, spreads, game totals and team totals in every league (full game, 1H, 1Q, 2H). Other sports' player props and custom markets show as *Ungraded* with the reason. When accounts posted different lines on one bet, it can land as a *Split*. Box scores of finished games are cached in `data/boxscores/`.
+
+**Trends tab** grades every week with picks and compares them: who hits (hit rate with a 95% range, ranked by the low end so small samples don't top the list), week-by-week hit rate for shared bets vs. all picks, hit rate by how many accounts agreed, an account × week heatmap for hot/cold streaks, and which markets hit, with break-even and flat 1-unit profit where straight bets posted odds. Finished-day ESPN scoreboards are cached in `data/scoreboards/`, so after the first load it's quick.
+
+The server reads `data/cappers.db` and builds the tables with the same code as the Excel report, so the two always agree. Runs started from the page are the normal CLI (`python -m capper_tracker run ...`) in a subprocess; their logs go to `logs/web_runs/`. It binds to localhost only, since it can start paid runs and has no login.
+
+For UI development, run `python -m capper_tracker.server --reload` and `cd web && npm run dev` (http://localhost:5173, forwards `/api` to :8000). API docs: http://127.0.0.1:8000/api/docs.
+
 ## What the report contains
 
 | Sheet | What it answers |

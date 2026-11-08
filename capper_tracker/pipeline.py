@@ -8,13 +8,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import db, games
-from .analyze import build_report
-from .config import (ACCOUNTS_FILE, EXPORT_DIR, EXTRACT_WORKERS, MAX_TWEETS_PER_ACCOUNT, TZ,
+from . import db, games, results
+from .analyze import build_report, prepare
+from .config import (ACCOUNTS_FILE, EXPORT_DIR, EXTRACT_WORKERS, MAX_TWEETS_PER_ACCOUNT, ROOT, TZ,
                      Window, nfl_week)
 from .export import write_report
 
 log = logging.getLogger(__name__)
+SCOREBOARD_CACHE = ROOT / "data" / "scoreboards"
+
+
+def _schedule() -> "games.Schedule":
+    return games.Schedule(cache_dir=SCOREBOARD_CACHE)
 
 
 def read_accounts_file(path: Path = ACCOUNTS_FILE) -> dict[str, float]:
@@ -104,18 +109,36 @@ def extract(conn, extractor, window: Window, retry_failed: bool = True, redo_all
 _FRAMES_CACHE: dict = {}
 
 
+def _game_days(window: Window):
+    first = window.start.astimezone(TZ).date()
+    # Cover every game a pick posted in the window could be for (NFL: through Monday night).
+    return first, max(window.end.astimezone(TZ).date(), first) + timedelta(days=8)
+
+
+def build_frames(conn, window: Window, schedule: "games.Schedule | None" = None) -> dict:
+    """Build every report table for a window (uncached). Used by the Excel report and the web API."""
+    first, last = _game_days(window)
+    return build_report(
+        db.picks_frame(conn, window.start_utc, window.end_utc),
+        db.tweets_frame(conn, window.start_utc, window.end_utc),
+        schedule=schedule or _schedule(), game_days=(first, last))
+
+
+def graded_picks(conn, window: Window, schedule: "games.Schedule | None" = None,
+                 boxes: "results.BoxScores | None" = None):
+    """Each account's picks in the window (deduped as in the report), graded against box scores."""
+    df = prepare(db.picks_frame(conn, window.start_utc, window.end_utc))
+    if not df.empty:
+        df = games.attach_games(df, schedule or _schedule(), *_game_days(window))
+    return results.grade(df, boxes)
+
+
 def _frames(conn, window: Window, schedule: "games.Schedule | None" = None):
     """Build the report tables once per run (report and notification share them)."""
     key = (id(conn), window.start_utc, window.end_utc)
     if key not in _FRAMES_CACHE:
-        first = window.start.astimezone(TZ).date()
-        # Cover every game a pick posted in the window could be for (NFL: through Monday night).
-        last = max(window.end.astimezone(TZ).date(), first) + timedelta(days=8)
         _FRAMES_CACHE.clear()
-        _FRAMES_CACHE[key] = build_report(
-            db.picks_frame(conn, window.start_utc, window.end_utc),
-            db.tweets_frame(conn, window.start_utc, window.end_utc),
-            schedule=schedule or games.Schedule(), game_days=(first, last))
+        _FRAMES_CACHE[key] = build_frames(conn, window, schedule)
     return _FRAMES_CACHE[key]
 
 

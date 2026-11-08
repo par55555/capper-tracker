@@ -129,6 +129,7 @@ def offline_espn(monkeypatch):
     """Keep tests offline: every Schedule reads the fake ESPN feed above."""
     from capper_tracker import games
     monkeypatch.setattr(games.Schedule, "_http_get", staticmethod(fake_espn))
+    monkeypatch.setattr(pipeline, "SCOREBOARD_CACHE", None)  # don't read real cached scoreboards
 
 
 @pytest.fixture
