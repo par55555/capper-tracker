@@ -233,7 +233,12 @@ def test_schedule_plist():
     from capper_tracker import schedule
     plist = schedule.build_plist("/opt/py/bin/python")
     assert plist["ProgramArguments"] == ["/opt/py/bin/python", "-m", "capper_tracker", "run", "--notify"]
-    assert {(d["Weekday"], d["Hour"]) for d in plist["StartCalendarInterval"]} == {(4, 12), (0, 11)}
+    times = {(d["Weekday"], d["Hour"], d["Minute"]) for d in plist["StartCalendarInterval"]}
+    # Every NFL slot gets a pull shortly before kickoff (Thu/Sun/Mon night, Sun 1pm + 4pm), plus
+    # an evening pull every day for basketball/hockey and Saturday college windows.
+    assert {(4, 19, 30), (0, 12, 15), (0, 15, 30), (0, 19, 30), (1, 19, 30), (6, 11, 15)} <= times
+    assert {(d, 18, 30) for d in range(7)} <= times
+    assert len(times) == len(plist["StartCalendarInterval"])  # no duplicates
 
 
 def test_notify_quoting_is_safe():

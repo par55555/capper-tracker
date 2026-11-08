@@ -44,6 +44,8 @@ def main() -> None:
             from .extractor import PickExtractor
             stats = pipeline.extract(conn, PickExtractor(), window, redo_all=args.redo_all)
             print("extract:", json.dumps(stats), flush=True)
+            if args.notify and stats.get("failed"):
+                notify.extraction_failed(window.name, stats["failed"], stats["posts"], stats.get("first_error", ""))
 
         if args.command in ("run", "report"):
             print("report:", pipeline.report(conn, window), flush=True)

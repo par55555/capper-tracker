@@ -1,15 +1,15 @@
 import { useMemo, useState } from "react";
 import { DataTable, type Column } from "../components/DataTable";
-import { Chips, Handles, League, LeanBar, Net, StatusPill, TweetLink } from "../components/bits";
-import { fmtGameTime, fmtNum, fmtOdds, fmtPostTime } from "../format";
-import type { Report, Row } from "../types";
+import { Chips, Handles, KalshiPrice, League, LeanBar, Net, StatusPill, TweetLink } from "../components/bits";
+import { fmtGameTime, fmtNum, fmtOdds, fmtPostTime, fmtProb } from "../format";
+import type { Row, WeekPayload } from "../types";
 
-const rowsOf = (r: Report, name: string) => r.frames[name]?.rows ?? [];
+const rowsOf = (r: WeekPayload, name: string) => r.frames[name]?.rows ?? [];
 const leaguesOf = (rows: Row[]) => [...new Set(rows.map((r) => r.league).filter(Boolean))].sort() as string[];
 
 // --- Team Themes ------------------------------------------------------------
 
-export function Themes({ report }: { report: Report }) {
+export function Themes({ report }: { report: WeekPayload }) {
   const rows = rowsOf(report, "Team Themes");
   const cols: Column[] = [
     { key: "team", label: "Team", render: (r) => <strong>{r.team}</strong> },
@@ -40,7 +40,7 @@ function themeClass(t: string) {
 
 // --- Players ----------------------------------------------------------------
 
-export function Players({ report }: { report: Report }) {
+export function Players({ report }: { report: WeekPayload }) {
   const all = rowsOf(report, "Players");
   const [league, setLeague] = useState<string | null>(null);
   const [onlyConflicts, setOnlyConflicts] = useState(false);
@@ -66,7 +66,7 @@ export function Players({ report }: { report: Report }) {
 
 // --- All Bets ---------------------------------------------------------------
 
-export function AllBets({ report }: { report: Report }) {
+export function AllBets({ report }: { report: WeekPayload }) {
   const all = rowsOf(report, "All Bets");
   const [league, setLeague] = useState<string | null>(null);
   const [minAccts, setMinAccts] = useState(1);
@@ -77,7 +77,9 @@ export function AllBets({ report }: { report: Report }) {
     { key: "game", label: "Game", render: (r) => <>{r.game} <span className="muted small">{fmtGameTime(r.game_time_et)}</span></>, sortValue: (r) => r.game_time_et },
     { key: "game_status", label: "Status", render: (r) => <StatusPill status={r.game_status} /> },
     { key: "lines", label: "Lines", sortValue: (r) => r.median_line },
-    { key: "median_odds_straight", label: "Price", align: "right", render: (r) => fmtOdds(r.median_odds_straight) },
+    { key: "kalshi_now", label: "Kalshi", render: (r) => <KalshiPrice row={r} live={report.window.live && r.game_status !== "Final"} />,
+      sortValue: (r) => r.kalshi_now ?? r.kalshi_first },
+    { key: "median_odds_straight", label: "Posted odds", align: "right", render: (r) => fmtOdds(r.median_odds_straight) },
     { key: "in_parlays", label: "In parlays", align: "right" },
     { key: "total_units", label: "Units", align: "right", render: (r) => fmtNum(r.total_units) || "" },
     { key: "category", label: "Category" },
@@ -98,7 +100,7 @@ export function AllBets({ report }: { report: Report }) {
 
 // --- Conflicts --------------------------------------------------------------
 
-export function Conflicts({ report }: { report: Report }) {
+export function Conflicts({ report }: { report: WeekPayload }) {
   const rows = rowsOf(report, "Conflicts");
   if (!rows.length) return <div className="empty">No market has tracked accounts on opposite sides in this window.</div>;
   return (
@@ -118,7 +120,7 @@ export function Conflicts({ report }: { report: Report }) {
 
 // --- Picks ------------------------------------------------------------------
 
-export function Picks({ report }: { report: Report }) {
+export function Picks({ report }: { report: WeekPayload }) {
   const all = rowsOf(report, "Picks");
   const [league, setLeague] = useState<string | null>(null);
   const rows = useMemo(() => all.filter((r) => !league || r.league === league), [all, league]);
@@ -128,6 +130,10 @@ export function Picks({ report }: { report: Report }) {
     { key: "label", label: "Bet", render: (r) => <span className="wrap">{r.label}</span> },
     { key: "line", label: "Line", align: "right", render: (r) => fmtNum(r.line) },
     { key: "odds", label: "Odds", align: "right", render: (r) => fmtOdds(r.odds) },
+    { key: "kalshi_prob_post", label: "Kalshi at post", align: "right",
+      render: (r) => r.kalshi_prob_post != null
+        ? <span title={`${r.kalshi_title}${r.kalshi_match === "interpolated" ? "\n" + r.kalshi_note : ""}`}>{r.kalshi_match === "interpolated" ? "≈" : ""}{fmtProb(r.kalshi_prob_post)}</span>
+        : <span className="muted small" title={r.kalshi_note || "No Kalshi market"}>—</span> },
     { key: "units", label: "Units", align: "right", render: (r) => fmtNum(r.units) },
     { key: "game", label: "Game", render: (r) => <>{r.game} <span className="muted small">{fmtGameTime(r.game_time_et)}</span></>, sortValue: (r) => r.game_time_et },
     { key: "flags", label: "", render: (r) => <>
@@ -147,7 +153,7 @@ export function Picks({ report }: { report: Report }) {
 
 // --- Posts (Tweets) ---------------------------------------------------------
 
-export function Posts({ report }: { report: Report }) {
+export function Posts({ report }: { report: WeekPayload }) {
   const all = rowsOf(report, "Tweets");
   const types = useMemo(() => [...new Set(all.map((r) => statusOf(r)))].sort(), [all]);
   const [type, setType] = useState<string | null>(null);
@@ -176,7 +182,7 @@ function shortError(e: string) {
 
 // --- Guide ------------------------------------------------------------------
 
-export function Guide({ report }: { report: Report }) {
+export function Guide({ report }: { report: WeekPayload }) {
   const rows = rowsOf(report, "Guide");
   return (
     <dl className="guide">

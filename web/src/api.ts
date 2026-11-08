@@ -1,4 +1,4 @@
-import type { Account, Report, ResultsReport, Run, Scope, TrendsReport, WeekInfo } from "./types";
+import type { Account, ExportFile, Run, Scope, TrendsReport, WeekInfo, WeekPayload } from "./types";
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -22,10 +22,12 @@ const scopeQuery = (s: Scope) => (s.kind === "week" ? `week=${s.week}` : `days=$
 
 export const api = {
   weeks: () => call<{ current_week: number; weeks: WeekInfo[] }>("/api/weeks"),
-  report: (s: Scope, refresh = false) =>
-    call<Report>(`/api/report?${scopeQuery(s)}${refresh ? "&refresh=true" : ""}`),
-  results: (s: Scope, refresh = false) =>
-    call<ResultsReport>(`/api/results?${scopeQuery(s)}${refresh ? "&refresh=true" : ""}`),
+  /** No scope = this NFL week so far (the Live page). */
+  week: (s: Scope | null, refresh = false) => {
+    const q = [s ? scopeQuery(s) : "", refresh ? "refresh=true" : ""].filter(Boolean).join("&");
+    return call<WeekPayload>(`/api/week${q ? `?${q}` : ""}`);
+  },
+  exports: (week?: number) => call<{ exports: ExportFile[] }>(`/api/exports${week != null ? `?week=${week}` : ""}`),
   trends: (refresh = false) => call<TrendsReport>(`/api/trends${refresh ? "?refresh=true" : ""}`),
   accounts: () => call<{ accounts: Account[] }>("/api/accounts"),
   saveAccounts: (handles: string[]) =>

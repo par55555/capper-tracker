@@ -71,3 +71,31 @@ export function Chips<T extends string>({ options, value, onChange, all = "All" 
     </div>
   );
 }
+
+/** Kalshi's probability for a bet. Live: price now, with movement since the first post.
+ *  Settled: what the market gave it when posted. "≈" = estimated between two Kalshi lines. */
+export function KalshiPrice({ row, live }: { row: Record<string, any>; live: boolean }) {
+  const now = row.kalshi_now, first = row.kalshi_first, close = row.kalshi_close;
+  if (now == null && first == null && close == null) {
+    return <span className="kalshi none" title="No matching Kalshi market">Kalshi —</span>;
+  }
+  const approx = row.kalshi_match === "interpolated" ? "≈" : "";
+  const main = live && now != null ? now : first ?? close;
+  const ref = live && now != null ? first : null;
+  const move = main != null && ref != null ? main - ref : null;
+  const tip = [row.kalshi_title, approx && "Estimated between two Kalshi lines",
+               first != null && `At first post: ${pct(first)}`, close != null && `Before kickoff: ${pct(close)}`,
+               now != null && `Now: ${pct(now)}`].filter(Boolean).join("\n");
+  return (
+    <span className="kalshi" title={tip}>
+      <span className="kalshi-label">Kalshi</span>
+      <strong>{approx}{pct(main)}</strong>
+      {move != null && Math.abs(move) >= 0.01 && (
+        <span className={move > 0 ? "pos" : "neg"}>{move > 0 ? "▲" : "▼"}{Math.abs(Math.round(move * 100))}</span>
+      )}
+      {!live && <span className="muted small">at post</span>}
+    </span>
+  );
+}
+
+const pct = (p: number | null | undefined) => (p == null ? "" : `${Math.round(p * 100)}%`);

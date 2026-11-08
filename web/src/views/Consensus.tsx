@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { Chips, Handles, League, StatusPill } from "../components/bits";
+import { Chips, Handles, KalshiPrice, League, StatusPill } from "../components/bits";
 import { fmtGameTime, fmtNum, fmtOdds } from "../format";
-import type { Report, Row } from "../types";
+import type { Row, WeekPayload } from "../types";
 
-function BetCard({ r }: { r: Row }) {
+function BetCard({ r, live }: { r: Row; live: boolean }) {
   const details = [
     r.lines && `Line ${r.lines}`,
     r.median_odds_straight != null && `Typical price ${fmtOdds(r.median_odds_straight)}`,
@@ -24,7 +24,10 @@ function BetCard({ r }: { r: Row }) {
           {r.game_time_et && <span className="muted">{fmtGameTime(r.game_time_et)}</span>}
           <StatusPill status={r.game_status} />
         </div>
-        <h3 className="bet-title">{r.bet}</h3>
+        <div className="bet-title-row">
+          <h3 className="bet-title">{r.bet}</h3>
+          <KalshiPrice row={r} live={live && r.game_status !== "Final"} />
+        </div>
         <p className="bet-means">{r.what_it_means}</p>
         {details.length > 0 && <div className="bet-details">{details.map((d, i) => <span key={i}>{d}</span>)}</div>}
         <Handles who={r.who} max={10} />
@@ -42,7 +45,7 @@ function useFiltered(rows: Row[], league: string | null, q: string) {
   }, [rows, league, q]);
 }
 
-export function Consensus({ report }: { report: Report }) {
+export function Consensus({ report, live = false }: { report: WeekPayload; live?: boolean }) {
   const top = report.frames["Top Consensus"]?.rows ?? [];
   const played = report.frames["Already Played"]?.rows ?? [];
   const [league, setLeague] = useState<string | null>(null);
@@ -66,7 +69,7 @@ export function Consensus({ report }: { report: Report }) {
         <h2 className="section-title">Still to play <span className="muted">{topF.length}</span></h2>
         <p className="section-sub">Bets two or more tracked accounts share on games that haven't finished. Most shared first, then soonest game.</p>
         {topF.length ? (
-          <div className="bet-list">{topF.map((r, i) => <BetCard key={i} r={r} />)}</div>
+          <div className="bet-list">{topF.map((r, i) => <BetCard key={i} r={r} live={live} />)}</div>
         ) : (
           <div className="empty">
             {top.length ? "No bets match your filters." :
@@ -82,7 +85,7 @@ export function Consensus({ report }: { report: Report }) {
             <h2 className="section-title">{top.length > 0 && <span className="caret">{playedOpen ? "▾" : "▸"}</span>} Already played <span className="muted">{playedF.length}</span></h2>
           </button>
           <p className="section-sub">Shared bets whose game was final when the report was built. Useful for checking how consensus did.</p>
-          {playedOpen && <div className="bet-list">{playedF.map((r, i) => <BetCard key={i} r={r} />)}</div>}
+          {playedOpen && <div className="bet-list">{playedF.map((r, i) => <BetCard key={i} r={r} live={false} />)}</div>}
         </section>
       )}
     </div>

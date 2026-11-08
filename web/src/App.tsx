@@ -2,146 +2,202 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { Stat } from "./components/bits";
 import { fmtAgo } from "./format";
-import type { Report, ResultsReport, Scope, TrendsReport, WeekInfo } from "./types";
+import type { ExportFile, Scope, TrendsReport, WeekInfo, WeekPayload } from "./types";
 import { Consensus } from "./views/Consensus";
 import { Control } from "./views/Control";
 import { Results } from "./views/Results";
-import { Trends } from "./views/Trends";
 import { AllBets, Conflicts, Guide, Picks, Players, Posts, Themes } from "./views/Tables";
+import { Trends } from "./views/Trends";
 
-const TABS = [
-  { id: "consensus", label: "Consensus" },
-  { id: "results", label: "Results" },
-  { id: "trends", label: "Trends" },
-  { id: "themes", label: "Team themes" },
-  { id: "players", label: "Players" },
-  { id: "bets", label: "All bets" },
-  { id: "conflicts", label: "Conflicts" },
-  { id: "picks", label: "Picks" },
-  { id: "posts", label: "Posts" },
-  { id: "guide", label: "Guide" },
-  { id: "control", label: "Run & accounts" },
-] as const;
-type TabId = (typeof TABS)[number]["id"];
+type Section = "live" | "history" | "analysis" | "manage";
+const SECTIONS: { id: Section; label: string }[] = [
+  { id: "live", label: "Live" },
+  { id: "history", label: "History" },
+  { id: "analysis", label: "Analysis" },
+];
+
+const WEEK_TABS = {
+  results: "Results", consensus: "Consensus", bets: "All bets", players: "Players", themes: "Team themes",
+  conflicts: "Conflicts", picks: "Picks", posts: "Posts", downloads: "Excel files",
+} as const;
+type WeekTab = keyof typeof WEEK_TABS;
+const LIVE_TABS: WeekTab[] = ["consensus", "bets", "players", "themes", "conflicts", "picks", "posts"];
+const HISTORY_TABS: WeekTab[] = ["results", "consensus", "bets", "players", "themes", "conflicts", "picks", "posts", "downloads"];
+const LIVE_REFRESH_MS = 120_000;
 
 const scopeKey = (s: Scope) => (s.kind === "week" ? `w${s.week}` : `d${s.days}`);
-const parseScope = (k: string): Scope | null => {
-  const m = /^([wd])(\d+)$/.exec(k);
-  if (!m) return null;
-  return m[1] === "w" ? { kind: "week", week: +m[2] } : { kind: "days", days: +m[2] };
+const parseScope = (k: string | undefined): Scope | null => {
+  const m = /^([wd])(\d+)$/.exec(k || "");
+  return !m ? null : m[1] === "w" ? { kind: "week", week: +m[2] } : { kind: "days", days: +m[2] };
 };
 
-function readHash(): { tab: TabId; scope: string | null } {
-  const [tab, scope] = location.hash.replace(/^#\/?/, "").split("/");
-  return { tab: (TABS.some((t) => t.id === tab) ? tab : "consensus") as TabId, scope: scope || null };
+interface Route { section: Section; scope: string | null; tab: string | null }
+function readRoute(): Route {
+  const parts = location.hash.replace(/^#\/?/, "").split("/");
+  const section = (["live", "history", "analysis", "manage"].includes(parts[0]) ? parts[0] : "live") as Section;
+  if (section === "history") return { section, scope: parts[1] || null, tab: parts[2] || null };
+  return { section, scope: null, tab: parts[1] || null };
 }
 
+// --- one week's tabs (shared by Live and History) ------------------------------
+
+function WeekTabs({ data, tabs, tab, setTab, live, exportsFor, goManage }: {
+  data: WeekPayload; tabs: WeekTab[]; tab: WeekTab; setTab: (t: WeekTab) => void; live: boolean;
+  exportsFor: number | null; goManage: () => void;
+}) {
+  const s = data.summary;
+  const counts: Partial<Record<WeekTab, number>> = {
+    consensus: data.frames["Top Consensus"]?.rows.length, bets: data.frames["All Bets"]?.rows.length,
+    players: data.frames["Players"]?.rows.length, themes: data.frames["Team Themes"]?.rows.length,
+    conflicts: data.frames["Conflicts"]?.rows.length, picks: data.frames["Picks"]?.rows.length,
+    posts: data.frames["Tweets"]?.rows.length,
+  };
+  const keyError = data.frames["Tweets"]?.rows.some((r) => r.extracted === -1 && /401|x-api-key|authentication/i.test(r.extract_error ?? ""));
+  const rs = data.results_summary;
+  return (
+    <>
+      <div className="stats">
+        {live ? <Stat label="Shared bets to play" value={s.shared_bets} tone={s.shared_bets ? "good" : undefined} />
+              : <Stat label={`Shared bets · ${rs.shared.hit_rate != null ? Math.round(rs.shared.hit_rate * 100) + "%" : "—"}`}
+                      value={`${rs.shared.won}–${rs.shared.lost}`} />}
+        <Stat label="Picks" value={s.picks.toLocaleString()} />
+        <Stat label="Accounts with picks" value={s.accounts_with_picks} />
+        <Stat label="Priced on Kalshi" value={s.picks ? `${Math.round((s.priced / s.picks) * 100)}%` : "—"}
+              hint={`${s.priced} of ${s.picks} picks matched to a Kalshi market`} />
+        <Stat label="Posts" value={s.posts.toLocaleString()} />
+        <Stat label="Failed / unprocessed" value={`${s.failed_posts} / ${s.pending_posts}`}
+              tone={s.failed_posts + s.pending_posts ? "warn" : undefined}
+              hint="Posts the model failed on, and posts not sent to the model yet. Neither counts toward picks." />
+      </div>
+      {(s.failed_posts > 0 || s.pending_posts > 0) && (
+        <div className="banner warn">
+          <strong>{s.failed_posts + s.pending_posts} of {s.posts} posts in this window have no picks extracted.</strong>{" "}
+          {keyError ? <>Anthropic rejected the API key (401). Update <code>ANTHROPIC_API_KEY</code> in <code>.env</code>, then </> : <>To include them, </>}
+          run <button className="linkish" onClick={goManage}>Extract</button> for this window.
+        </div>
+      )}
+      <nav className="tabs">
+        {tabs.map((t) => (
+          <button key={t} className={`tab ${tab === t ? "on" : ""}`} onClick={() => setTab(t)}>
+            {WEEK_TABS[t]}{counts[t] != null && <span className="tab-count">{counts[t]}</span>}
+          </button>
+        ))}
+      </nav>
+      {tab === "results" && <Results data={{ window: data.window, built_at: data.built_at, summary: rs, frames: data.results }} />}
+      {tab === "consensus" && <Consensus report={data} live={live} />}
+      {tab === "bets" && <AllBets report={data} />}
+      {tab === "players" && <Players report={data} />}
+      {tab === "themes" && <Themes report={data} />}
+      {tab === "conflicts" && <Conflicts report={data} />}
+      {tab === "picks" && <Picks report={data} />}
+      {tab === "posts" && <Posts report={data} />}
+      {tab === "downloads" && <Downloads week={exportsFor} />}
+    </>
+  );
+}
+
+function Downloads({ week }: { week: number | null }) {
+  const [files, setFiles] = useState<ExportFile[] | null>(null);
+  useEffect(() => { api.exports(week ?? undefined).then((r) => setFiles(r.exports)).catch(() => setFiles([])); }, [week]);
+  if (!files) return <div className="empty">Loading…</div>;
+  if (!files.length) return <div className="empty">No Excel reports saved for this window. Runs save one to <code>exports/</code>.</div>;
+  return (
+    <div className="panel">
+      <p className="section-sub">Each run saves a spreadsheet of that moment's report. Newest first.</p>
+      <ul className="file-list">
+        {files.map((f) => (
+          <li key={f.name}>
+            <a href={`/api/exports/${encodeURIComponent(f.name)}`} download>{f.name}</a>
+            <span className="muted small">{new Date(f.modified).toLocaleString()} · {Math.round(f.size / 1024)} KB</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// --- app -----------------------------------------------------------------------
+
 export default function App() {
-  const initial = readHash();
-  const [tab, setTab] = useState<TabId>(initial.tab);
-  const [scope, setScope] = useState<Scope | null>(initial.scope ? parseScope(initial.scope) : null);
+  const initial = readRoute();
+  const [section, setSection] = useState<Section>(initial.section);
+  const [liveTab, setLiveTab] = useState<WeekTab>(initial.section === "live" && LIVE_TABS.includes(initial.tab as WeekTab) ? initial.tab as WeekTab : "consensus");
+  const [histTab, setHistTab] = useState<WeekTab>(initial.section === "history" && HISTORY_TABS.includes(initial.tab as WeekTab) ? initial.tab as WeekTab : "results");
+  const [histScope, setHistScope] = useState<Scope | null>(parseScope(initial.scope ?? undefined));
   const [weeks, setWeeks] = useState<WeekInfo[]>([]);
   const [currentWeek, setCurrentWeek] = useState<number | null>(null);
-  const [report, setReport] = useState<Report | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [results, setResults] = useState<{ key: string; data: ResultsReport } | null>(null);
-  const [resultsLoading, setResultsLoading] = useState(false);
-  const resultsTried = useRef<string | null>(null); // don't auto-retry a window that just failed
+  const [live, setLive] = useState<WeekPayload | null>(null);
+  const [hist, setHist] = useState<Record<string, WeekPayload>>({});
   const [trends, setTrends] = useState<TrendsReport | null>(null);
-  const [trendsLoading, setTrendsLoading] = useState(false);
-  const trendsTried = useRef(false);
+  const [loading, setLoading] = useState<Record<string, boolean>>({});
+  const [error, setError] = useState<string | null>(null);
+  const tried = useRef<Set<string>>(new Set());
 
-  const loadWeeks = useCallback(() =>
-    api.weeks().then((w) => {
-      setWeeks(w.weeks);
-      setCurrentWeek(w.current_week);
-      setScope((s) => s ?? { kind: "week", week: w.current_week });
-    }).catch((e) => setError(e.message)), []);
+  const guard = useCallback(async (k: string, fn: () => Promise<void>) => {
+    tried.current.add(k);
+    setLoading((l) => ({ ...l, [k]: true })); setError(null);
+    try { await fn(); } catch (e: any) { setError(e.message); } finally { setLoading((l) => ({ ...l, [k]: false })); }
+  }, []);
+
+  const loadWeeks = useCallback(() => api.weeks().then((w) => {
+    setWeeks(w.weeks); setCurrentWeek(w.current_week);
+  }).catch((e) => setError(e.message)), []);
+  const loadLive = useCallback((refresh = false) => guard("live", async () => setLive(await api.week(null, refresh))), [guard]);
+  const loadHist = useCallback((s: Scope, refresh = false) =>
+    guard(`h:${scopeKey(s)}`, async () => { const d = await api.week(s, refresh); setHist((h) => ({ ...h, [scopeKey(s)]: d })); }), [guard]);
+  const loadTrends = useCallback((refresh = false) => guard("trends", async () => setTrends(await api.trends(refresh))), [guard]);
 
   useEffect(() => { loadWeeks(); }, [loadWeeks]);
 
-  const loadReport = useCallback(async (s: Scope, refresh = false) => {
-    setLoading(true); setError(null);
-    try { setReport(await api.report(s, refresh)); }
-    catch (e: any) { setError(e.message); }
-    finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { if (scope) loadReport(scope); }, [scope, loadReport]);
-
-  // Results need box scores, so they load only when the tab is opened.
-  const loadResults = useCallback(async (s: Scope, refresh = false) => {
-    resultsTried.current = scopeKey(s);
-    setResultsLoading(true); setError(null);
-    try { setResults({ key: scopeKey(s), data: await api.results(s, refresh) }); }
-    catch (e: any) { setError(e.message); }
-    finally { setResultsLoading(false); }
-  }, []);
-
-  // Trends cover every week, independent of the week picker.
-  const loadTrends = useCallback(async (refresh = false) => {
-    trendsTried.current = true;
-    setTrendsLoading(true); setError(null);
-    try { setTrends(await api.trends(refresh)); }
-    catch (e: any) { setError(e.message); }
-    finally { setTrendsLoading(false); }
-  }, []);
-
+  // History defaults to the most recent finished week that has picks.
+  const pastWeeks = useMemo(() => weeks.filter((w) => currentWeek == null || w.week < currentWeek), [weeks, currentWeek]);
   useEffect(() => {
-    if (tab === "trends" && !trends && !trendsLoading && !trendsTried.current) loadTrends();
-  }, [tab, trends, trendsLoading, loadTrends]);
+    if (!histScope && weeks.length) {
+      const w = pastWeeks.find((x) => x.picks > 0) ?? pastWeeks[0] ?? weeks[0];
+      if (w) setHistScope({ kind: "week", week: w.week });
+    }
+  }, [histScope, weeks, pastWeeks]);
 
+  // Load what the visible section needs (once; Refresh reloads).
   useEffect(() => {
-    if (tab === "results" && scope && results?.key !== scopeKey(scope) && !resultsLoading
-        && resultsTried.current !== scopeKey(scope)) loadResults(scope);
-  }, [tab, scope, results?.key, resultsLoading, loadResults]);
+    if ((section === "live" || section === "manage") && !live && !tried.current.has("live")) loadLive();
+    if (section === "history" && histScope && !hist[scopeKey(histScope)] && !tried.current.has(`h:${scopeKey(histScope)}`)) loadHist(histScope);
+    if (section === "analysis" && !trends && !tried.current.has("trends")) loadTrends();
+  }, [section, histScope, live, hist, trends, loadLive, loadHist, loadTrends]);
 
+  // Live prices: refresh every two minutes while the Live page is open.
   useEffect(() => {
-    if (scope) history.replaceState(null, "", `#/${tab}/${scopeKey(scope)}`);
-  }, [tab, scope]);
+    if (section !== "live") return;
+    const t = setInterval(() => loadLive(), LIVE_REFRESH_MS);
+    return () => clearInterval(t);
+  }, [section, loadLive]);
 
+  // URL mirrors where you are, so reloads and links keep your place.
   useEffect(() => {
-    const onHash = () => {
-      const h = readHash();
-      setTab(h.tab);
-      const s = h.scope && parseScope(h.scope);
-      if (s) setScope((cur) => (cur && scopeKey(cur) === scopeKey(s) ? cur : s));
-    };
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, []);
+    const h = section === "history" ? `#/history/${histScope ? scopeKey(histScope) : ""}/${histTab}`
+      : section === "live" ? `#/live/${liveTab}` : `#/${section}`;
+    history.replaceState(null, "", h);
+  }, [section, histScope, histTab, liveTab]);
 
-  const scopeOptions = useMemo(() => {
-    const ws = new Set(weeks.map((w) => w.week));
-    if (currentWeek) ws.add(currentWeek);
-    const opts = [...ws].sort((a, b) => b - a).map((w) => ({
-      key: `w${w}`, label: w === currentWeek ? `Week ${w} · this week` : `Week ${w}`,
-    }));
-    return [...opts, { key: "d3", label: "Last 3 days" }, { key: "d7", label: "Last 7 days" }, { key: "d14", label: "Last 14 days" }];
-  }, [weeks, currentWeek]);
+  const refresh = () => {
+    if (section === "live") loadLive(true);
+    if (section === "history" && histScope) loadHist(histScope, true);
+    if (section === "analysis") loadTrends(true);
+  };
+  const onRunFinished = () => {
+    loadWeeks(); setHist({}); setTrends(null); tried.current.clear(); loadLive(true);
+  };
 
-  const onRunFinished = useCallback(() => {
-    loadWeeks();
-    setResults(null);
-    resultsTried.current = null;
-    setTrends(null);
-    trendsTried.current = false;
-    if (scope) loadReport(scope, true);
-  }, [scope, loadWeeks, loadReport]);
+  const histKey = histScope ? scopeKey(histScope) : "";
+  const histData = histScope ? hist[histKey] : undefined;
+  const activeLoading = section === "live" ? loading.live : section === "history" ? loading[`h:${histKey}`] : section === "analysis" ? loading.trends : false;
+  const builtAt = section === "live" ? live?.built_at : section === "history" ? histData?.built_at : section === "analysis" ? trends?.built_at : undefined;
 
-  const s = report?.summary;
-  const counts: Partial<Record<TabId, number>> = report ? {
-    consensus: report.frames["Top Consensus"]?.rows.length,
-    themes: report.frames["Team Themes"]?.rows.length,
-    players: report.frames["Players"]?.rows.length,
-    bets: report.frames["All Bets"]?.rows.length,
-    conflicts: report.frames["Conflicts"]?.rows.length,
-    picks: report.frames["Picks"]?.rows.length,
-    posts: report.frames["Tweets"]?.rows.length,
-  } : {};
-
-  const keyError = report?.frames["Tweets"]?.rows.some((r) => r.extracted === -1 && /401|x-api-key|authentication/i.test(r.extract_error ?? ""));
+  const scopeOptions = [
+    ...pastWeeks.map((w) => ({ key: `w${w.week}`, label: `Week ${w.week}${w.picks ? "" : " (no picks)"}` })),
+    { key: "d7", label: "Last 7 days" }, { key: "d14", label: "Last 14 days" }, { key: "d30", label: "Last 30 days" },
+  ];
+  const liveWeek = live ? live.window.name.replace(/^week0?/, "") : null;
 
   return (
     <div className="app">
@@ -150,78 +206,64 @@ export default function App() {
           <span className="logo">CT</span>
           <div>
             <div className="brand-name">Capper Tracker</div>
-            <div className="brand-sub muted">{report?.window.label ?? "Loading…"}</div>
+            <div className="brand-sub muted">
+              {section === "live" && (live ? `Week ${liveWeek} so far · prices refresh every 2 min` : "Loading…")}
+              {section === "history" && (histData?.window.label ?? "Pick a week")}
+              {section === "analysis" && (trends ? `All weeks with picks (${trends.weeks[0]}–${trends.weeks[trends.weeks.length - 1]})` : "Loading…")}
+              {section === "manage" && "Runs, tracked accounts and definitions"}
+            </div>
           </div>
         </div>
+        <nav className="sections">
+          {SECTIONS.map((s) => (
+            <button key={s.id} className={section === s.id ? "on" : ""} onClick={() => setSection(s.id)}>
+              {s.id === "live" && <i className="live-dot" />}{s.label}
+            </button>
+          ))}
+        </nav>
         <div className="row gap">
-          <select className="scope" value={scope ? scopeKey(scope) : ""} onChange={(e) => setScope(parseScope(e.target.value))}>
-            {scopeOptions.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
-          </select>
-          <button className="btn" onClick={() => { if (!scope) return; loadReport(scope, true); if (tab === "results") loadResults(scope, true); if (tab === "trends") loadTrends(true); }}
-                  disabled={loading || resultsLoading || trendsLoading || !scope}
-                  title="Rebuild from the database and re-check game status on ESPN">
-            {loading || resultsLoading || trendsLoading ? "Building…" : "Refresh"}
-          </button>
+          {section === "history" && (
+            <select className="scope" value={histKey} onChange={(e) => setHistScope(parseScope(e.target.value))}>
+              {scopeOptions.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          )}
+          {section !== "manage" && (
+            <button className="btn" onClick={refresh} disabled={!!activeLoading} title="Rebuild now: re-check game status and Kalshi prices">
+              {activeLoading ? "Updating…" : "Refresh"}
+            </button>
+          )}
+          <button className={`btn icon-btn ${section === "manage" ? "on" : ""}`} onClick={() => setSection("manage")} title="Runs, accounts and guide">⚙</button>
         </div>
       </header>
 
-      {s && tab !== "trends" && (
-        <div className="stats">
-          <Stat label="Shared bets to play" value={s.shared_bets} tone={s.shared_bets ? "good" : undefined} />
-          <Stat label="Picks" value={s.picks.toLocaleString()} />
-          <Stat label="Accounts with picks" value={s.accounts_with_picks} />
-          <Stat label="Posts" value={s.posts.toLocaleString()} />
-          <Stat label="Conflicts" value={s.conflicts} />
-          <Stat label="Failed / unprocessed" value={`${s.failed_posts} / ${s.pending_posts}`}
-                tone={s.failed_posts + s.pending_posts ? "warn" : undefined}
-                hint="Posts the model failed on, and posts not sent to the model yet. Neither counts toward picks." />
-        </div>
-      )}
-
-      {s && tab !== "trends" && (s.failed_posts > 0 || s.pending_posts > 0) && (
-        <div className="banner warn">
-          <strong>{s.failed_posts + s.pending_posts} of {s.posts} posts in this window have no picks extracted.</strong>{" "}
-          {keyError ? <>Anthropic rejected the API key (401). Update <code>ANTHROPIC_API_KEY</code> in <code>.env</code>, then </> : <>To include them, </>}
-          run <button className="linkish" onClick={() => setTab("control")}>Extract</button> for this window.
-        </div>
-      )}
       {error && <div className="banner err">{error}</div>}
 
-      <nav className="tabs">
-        {TABS.map((t) => (
-          <button key={t.id} className={`tab ${tab === t.id ? "on" : ""}`} onClick={() => setTab(t.id)}>
-            {t.label}
-            {counts[t.id] != null && <span className="tab-count">{counts[t.id]}</span>}
-          </button>
-        ))}
-      </nav>
-
-      <main className={loading && report ? "dim" : undefined}>
-        {tab === "trends" ? (
-          trends ? <div className={trendsLoading ? "dim" : undefined}><Trends data={trends} /></div> :
-            <div className="empty big">{trendsLoading ? "Grading every week against ESPN box scores… the first load can take a minute; after that it's cached." : "No trends loaded."}</div>
-        ) : tab === "results" ? (
-          results && scope && results.key === scopeKey(scope) ? <div className={resultsLoading ? "dim" : undefined}><Results data={results.data} /></div> :
-            <div className="empty big">{resultsLoading ? "Grading picks against ESPN box scores… the first load for a week fetches every game and can take ~20s." : "No results loaded."}</div>
-        ) : tab === "control" ? (
-          currentWeek != null && <Control currentWeek={currentWeek} weeks={weeks} onFinished={onRunFinished} />
-        ) : !report ? (
-          <div className="empty big">{loading ? "Building report… the first load checks game schedules on ESPN and can take ~10s." : "No report loaded."}</div>
-        ) : (
-          <>
-            {tab === "consensus" && <Consensus report={report} />}
-            {tab === "themes" && <Themes report={report} />}
-            {tab === "players" && <Players report={report} />}
-            {tab === "bets" && <AllBets report={report} />}
-            {tab === "conflicts" && <Conflicts report={report} />}
-            {tab === "picks" && <Picks report={report} />}
-            {tab === "posts" && <Posts report={report} />}
-            {tab === "guide" && <Guide report={report} />}
-          </>
+      <main className={activeLoading && builtAt ? "dim" : undefined}>
+        {section === "live" && (live
+          ? <WeekTabs data={live} tabs={LIVE_TABS} tab={liveTab} setTab={setLiveTab} live exportsFor={null} goManage={() => setSection("manage")} />
+          : <Loading what="this week's picks and live Kalshi prices" busy={!!loading.live} />)}
+        {section === "history" && (histData
+          ? <WeekTabs data={histData} tabs={HISTORY_TABS} tab={histTab} setTab={setHistTab} live={false}
+                      exportsFor={histScope?.kind === "week" ? histScope.week : null} goManage={() => setSection("manage")} />
+          : <Loading what="that week, its results and Kalshi prices" busy={!!loading[`h:${histKey}`]} />)}
+        {section === "analysis" && (trends ? <Trends data={trends} /> : <Loading what="every week's results and Kalshi prices" busy={!!loading.trends} slow />)}
+        {section === "manage" && (
+          <div className="stack">
+            {currentWeek != null && <Control currentWeek={currentWeek} weeks={weeks} onFinished={onRunFinished} />}
+            {live && <section><h2 className="section-title">Guide</h2><Guide report={live} /></section>}
+          </div>
         )}
       </main>
 
-      {report && <footer className="muted small">Report built {fmtAgo(report.built_at)} · game times in ET from ESPN</footer>}
+      {builtAt && <footer className="muted small">Updated {fmtAgo(builtAt)} · game data from ESPN · prices from Kalshi</footer>}
+    </div>
+  );
+}
+
+function Loading({ what, busy, slow }: { what: string; busy: boolean; slow?: boolean }) {
+  return (
+    <div className="empty big">
+      {busy ? <>Loading {what}…{slow ? " The first load fetches every game and price and can take a minute or two; after that it's cached." : " The first load can take up to a minute."}</> : "Nothing loaded."}
     </div>
   );
 }

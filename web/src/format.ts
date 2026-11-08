@@ -43,3 +43,13 @@ export const splitWho = (who: string | null | undefined): string[] =>
   who ? who.split(",").map((s) => s.trim()).filter(Boolean) : [];
 
 export const signed = (n: number) => (n > 0 ? `+${n}` : `${n}`);
+
+/** A probability (0-1) as a whole percent, e.g. 0.625 -> "63%". */
+export const fmtProb = (p: number | null | undefined) => (p == null || isNaN(p) ? "" : `${Math.round(p * 100)}%`);
+
+/** Signed change in percentage points, e.g. 0.07 -> "+7 pts". */
+export const fmtPts = (d: number | null | undefined) => {
+  if (d == null || isNaN(d)) return "";
+  const n = Math.round(d * 100);
+  return n === 0 ? "0 pts" : `${n > 0 ? "+" : "−"}${Math.abs(n)} pts`;
+};

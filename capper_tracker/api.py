@@ -2,7 +2,7 @@
 
     python -m capper_tracker.server        # http://127.0.0.1:8000
 
-Read endpoints serve the same tables as the Excel report (built by pipeline.build_frames), so the
+Read endpoints serve the same tables as the Excel report (built by pipeline.week_bundle), so the
 browser and the workbook never disagree. Write endpoints edit accounts.txt and start pipeline runs
 as a subprocess of the normal CLI, exactly as the scheduler would.
 """
@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import db, pipeline, results, trends
-from .config import ACCOUNTS_FILE, ROOT, TZ, current_week, lookback, nfl_week_to_date
+from .config import ACCOUNTS_FILE, EXPORT_DIR, ROOT, TZ, current_week, lookback, nfl_week_to_date
 from concurrent.futures import ThreadPoolExecutor
 
 WEB_DIST = ROOT / "web" / "dist"
@@ -67,7 +67,6 @@ def _db_fingerprint(conn) -> tuple:
 
 
 _report_cache: dict = {}
-_results_cache: dict = {}
 _report_lock = threading.Lock()
 
 
@@ -79,7 +78,6 @@ _trends_body: dict = {}  # fingerprints of every week -> response
 def _clear_caches() -> None:
     with _report_lock:
         _report_cache.clear()
-        _results_cache.clear()
 
 
 # --- read endpoints ---------------------------------------------------------
@@ -101,71 +99,77 @@ def weeks():
     return {"current_week": current_week(), "weeks": [dict(r) for r in rows]}
 
 
-@app.get("/api/report")
-def report(week: int | None = Query(None), days: int | None = Query(None), refresh: bool = False):
-    """All report tables for one window (default: this NFL week so far)."""
+LIVE_TTL_SECONDS = 120   # the current week: Kalshi prices and game status move
+
+
+def _report_summary(frames: dict) -> dict:
+    picks, tweets, top = frames["Picks"], frames["Tweets"], frames["Top Consensus"]
+    return {
+        "posts": len(tweets),
+        "picks": len(picks),
+        "accounts_with_picks": int(picks["handle"].nunique()) if not picks.empty else 0,
+        "shared_bets": len(top),
+        "conflicts": len(frames["Conflicts"]),
+        "failed_posts": int((tweets["extracted"] == -1).sum()) if not tweets.empty else 0,
+        "pending_posts": int((tweets["extracted"] == 0).sum()) if not tweets.empty else 0,
+        "priced": int(picks["kalshi_prob_post"].notna().sum()) if "kalshi_prob_post" in picks else 0,
+    }
+
+
+@app.get("/api/week")
+def week_endpoint(week: int | None = Query(None), days: int | None = Query(None), refresh: bool = False):
+    """Everything for one window (default: this NFL week so far): report tables with Kalshi prices
+    joined on, and graded results. Live and History both use this."""
     window = _window(week, days)
+    live = window.end >= datetime.now(window.end.tzinfo) - timedelta(minutes=5)
     conn = db.connect()
     try:
-        # Key on the window's identity, not its end (which is "now" for the live week).
         key = (window.name, window.start_utc, _db_fingerprint(conn))
+        ttl = LIVE_TTL_SECONDS if live else REPORT_TTL_SECONDS * 6
         with _report_lock:
             hit = _report_cache.get(key)
-            if hit and not refresh and time.time() - hit[0] < REPORT_TTL_SECONDS:
+            if hit and not refresh and time.time() - hit[0] < ttl:
                 return hit[1]
-            frames = pipeline.build_frames(conn, window)
+        b = pipeline.week_bundle(conn, window)
     finally:
         conn.close()
-
-    picks, tweets, top = frames["Picks"], frames["Tweets"], frames["Top Consensus"]
-    failed = int((tweets["extracted"] == -1).sum()) if not tweets.empty else 0
-    pending = int((tweets["extracted"] == 0).sum()) if not tweets.empty else 0
     body = {
-        "window": {"name": window.name, "label": str(window),
+        "window": {"name": window.name, "label": str(window), "live": live,
                    "start": window.start.isoformat(), "end": window.end.isoformat()},
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "summary": {
-            "posts": len(tweets),
-            "picks": len(picks),
-            "accounts_with_picks": int(picks["handle"].nunique()) if not picks.empty else 0,
-            "shared_bets": len(top),
-            "conflicts": len(frames["Conflicts"]),
-            "failed_posts": failed,
-            "pending_posts": pending,
-        },
-        "frames": {name: _records(df) for name, df in frames.items()},
+        "summary": _report_summary(b["frames"]),
+        "results_summary": b["results"]["summary"],
+        "frames": {name: _records(df) for name, df in b["frames"].items()},
+        "results": {name: _records(df) for name, df in b["results"]["frames"].items()},
     }
     with _report_lock:
-        _report_cache.clear()  # keep only the latest window; reports are cheap to rebuild
+        if len(_report_cache) > 8:  # a handful of recently viewed weeks
+            _report_cache.pop(min(_report_cache, key=lambda k: _report_cache[k][0]))
         _report_cache[key] = (time.time(), body)
     return body
 
 
-@app.get("/api/results")
-def results_endpoint(week: int | None = Query(None), days: int | None = Query(None), refresh: bool = False):
-    """How the window's picks actually turned out, graded against ESPN box scores."""
-    window = _window(week, days)
-    conn = db.connect()
-    try:
-        key = (window.name, window.start_utc, _db_fingerprint(conn))
-        with _report_lock:
-            hit = _results_cache.get(key)
-            if hit and not refresh and time.time() - hit[0] < REPORT_TTL_SECONDS:
-                return hit[1]
-            graded = pipeline.graded_picks(conn, window)
-    finally:
-        conn.close()
-    rep = results.results_report(graded)
-    body = {
-        "window": {"name": window.name, "label": str(window)},
-        "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "summary": rep["summary"],
-        "frames": {name: _records(df) for name, df in rep["frames"].items()},
-    }
-    with _report_lock:
-        _results_cache.clear()
-        _results_cache[key] = (time.time(), body)
-    return body
+EXPORT_NAME = re.compile(r"^[\w.-]+\.xlsx$")
+
+
+@app.get("/api/exports")
+def list_exports(week: int | None = Query(None)):
+    """Excel reports saved by runs, newest first; optionally only one NFL week's."""
+    files = sorted(Path(EXPORT_DIR).glob("*.xlsx"), key=lambda f: f.stat().st_mtime, reverse=True)
+    if week is not None:
+        files = [f for f in files if f.name.startswith(f"week{week:02d}_")]
+    return {"exports": [{"name": f.name, "size": f.stat().st_size,
+                         "modified": datetime.fromtimestamp(f.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")}
+                        for f in files]}
+
+
+@app.get("/api/exports/{name}")
+def download_export(name: str):
+    f = Path(EXPORT_DIR) / name
+    if not EXPORT_NAME.match(name) or not f.is_file():
+        raise HTTPException(404, "No such report")
+    return FileResponse(f, filename=name,
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 def _week_fingerprint(conn, week: int) -> tuple:

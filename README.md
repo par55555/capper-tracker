@@ -7,11 +7,10 @@ Every week, Capper Tracker:
 1. **Collects** the latest posts from a list of X (Twitter) accounts you choose.
 2. **Reads** each post, including screenshots of bet slips, using Claude (an AI model), and turns it into a clean list of bets: "Ja'Marr Chase over 74.5 receiving yards", "Chiefs -3.5", and so on.
 3. **Finds the consensus**: bets that several accounts posted independently, ranked by how many agree.
-4. **Grades** every bet once the game is over, using official box scores, so you can see who hits and whether following the crowd pays off.
+4. **Prices** every bet with [Kalshi](https://kalshi.com)'s market odds: what the market thought when the capper posted it, at kickoff, and right now.
+5. **Grades** every bet once the game is over, using official box scores, so you can see who hits, who beats the market, and whether following the crowd pays off.
 
 You use it through a web page on your own computer, or as a spreadsheet report that's generated automatically.
-
-![Consensus view: bets shared by several accounts, ranked by how many agree](docs/images/consensus.png)
 
 ---
 
@@ -32,24 +31,21 @@ You use it through a web page on your own computer, or as a spreadsheet report t
 
 ## What you'll see
 
-The web app has these tabs:
+The web app has three pages, switched at the top:
 
-| Tab | What it shows |
+| Page | What it's for |
 |---|---|
-| **Consensus** | Bets that 2+ accounts posted on games that haven't been played yet, most-shared first. Each card explains the bet in plain English, shows the game and kickoff time, and lists who posted it. |
-| **Results** | How the selected week turned out: each shared bet marked Won/Lost with what actually happened ("74 rec yds", "2 TDs"), plus each account's record. |
-| **Trends** | All weeks together: who hits most reliably, which kinds of bets hit, and whether agreement between accounts helps. |
-| **Team themes** | NFL only. Which teams the accounts expect to throw a lot vs. run a lot, based on the player props they're betting. |
-| **Players** | Every player anyone bet on, and whether accounts lean over or under. |
-| **All bets** | Every bet, including ones only one account posted. |
-| **Conflicts** | Bets where tracked accounts are on opposite sides. |
-| **Picks / Posts** | The raw material: every extracted bet with a link to the original post, and every post with how it was classified. Useful for double-checking. |
-| **Guide** | Definitions of every term and column. |
-| **Run & accounts** | Add or remove tracked accounts, and run the weekly update with a button. |
+| **Live** (front page) | **This week, right now.** Bets that 2+ accounts posted on games that haven't started, most-shared first, each with its **current Kalshi price** and how much it has moved since the first account posted it. Prices refresh every 2 minutes. Tabs for all bets, players, team themes, conflicts, raw picks and posts. |
+| **History** | **Any past week, broken out like the Excel reports.** Results (every bet marked Won/Lost with what actually happened and what the market gave it), plus consensus, all bets, players, team themes, conflicts, picks, posts, and the saved Excel files to download. |
+| **Analysis** | **What's working, across every week.** Who beats the market (not just who hits), whether agreement between accounts beats the price, favorites vs. long shots, which markets hit, week-by-week trends, and hot/cold streaks. |
 
-![Results view: each shared bet graded against the final box score](docs/images/results.png)
+The ⚙ button opens **Manage**: run the update with a button, add or remove tracked accounts, and a guide to every term.
 
-![Trends view: who hits, week by week, and whether agreement helps](docs/images/trends.png)
+![History: a past week's shared bets, each with the Kalshi price when it was posted](docs/images/consensus.png)
+
+![Results: each shared bet graded, with what happened and what the market gave it](docs/images/results.png)
+
+![Analysis: accounts and agreement measured against Kalshi's odds](docs/images/trends.png)
 
 ---
 
@@ -63,7 +59,7 @@ The web app has these tabs:
 | **An X API bearer token**, with pay-per-use credits | To read posts from X. | [developer.x.com](https://developer.x.com/) → create a project and app → copy the *Bearer Token* |
 | **An Anthropic API key** | To read the posts and bet slips. | [console.anthropic.com](https://console.anthropic.com/) → API Keys |
 
-Game schedules, scores and box scores come from ESPN's public feeds. No account is needed for those.
+Game schedules, scores and box scores come from ESPN's public feeds, and market prices from Kalshi's public market data. Neither needs an account or key.
 
 ---
 
@@ -167,20 +163,33 @@ python -m capper_tracker extract           # retry posts that failed to be read
 
 Each run also saves a spreadsheet. The newest one is always at `exports/latest_consensus.xlsx`, with dated copies next to it.
 
-### Run it automatically twice a week (Mac)
+### Run it automatically (Mac)
 
 ```bash
-python -m capper_tracker.schedule install    # every Thursday 12:00 and Sunday 11:00
+python -m capper_tracker.schedule install    # ~20 times a week, timed around game windows
 python -m capper_tracker.schedule run-now    # try it once right now
 python -m capper_tracker.schedule status     # did the last one work?
 python -m capper_tracker.schedule uninstall  # turn it off
 ```
 
-Run `install` with your `capper` environment active; the schedule uses that environment. After each run you get a Mac notification with the top shared bets, or an alert if something went wrong.
+Run `install` with your `capper` environment active; the schedule uses that environment.
 
-- If the Mac is **asleep** at the scheduled time, the run happens when it wakes up. If it's **shut down**, that run is skipped.
+**When it runs (Eastern time), and why.** Most picks go up 1–8 hours before their game. NFL picks cluster on Sunday morning; NBA and NHL picks around 9–10am and 5–6pm. So the pulls are timed just before each slate:
+
+| When | Why |
+|---|---|
+| Thu 7:30pm | Thursday Night Football |
+| Sun 8:45am, 12:15pm, 3:30pm, 7:30pm | London game, 1pm, 4pm and Sunday night games |
+| Mon 7:30pm | Monday Night Football |
+| Sat 11:15am, 3:00pm | College football noon and afternoon kickoffs |
+| Weekdays 12:30pm, every day 6:30pm | NBA / NHL / MLB slates |
+
+Replaying every stored pick against this schedule, **83% of picks (91% of NFL picks) are collected before their game starts**, compared with 37% (62% NFL) for a twice-a-week schedule. More pulls barely change the cost: X bills per new post, and each run only asks for posts since the last one.
+
+- **Notifications** only appear when a *new* shared bet shows up, or when something fails (including posts that couldn't be read, e.g. an expired API key).
+- If the Mac is **asleep** at a scheduled time, that run happens when it wakes. If it's **shut down**, the run is skipped. For game days, keep it plugged in and awake.
 - Not seeing notifications? System Settings → Notifications → allow **Script Editor**.
-- On Linux, use cron instead: `0 12 * * 4` and `0 11 * * 0`, running `python -m capper_tracker run`.
+- On Linux, use cron with the same times, running `python -m capper_tracker run`.
 
 ### Which posts count for "this week"?
 
@@ -196,17 +205,33 @@ NFL weeks run **Tuesday to Monday** (Eastern time). A Thursday run sees posts si
 
 **Bets are grouped regardless of the exact line.** "Chase over 74.5 yards" and "Chase over 79.5 yards" are the same bet; the card shows the range of lines posted.
 
-**Grading** (Results and Trends tabs):
+**Grading** (History → Results, and Analysis):
 - A bet is graded once ESPN marks its game **Final**.
 - **Graded:** NFL and college football player props (yards, receptions, touchdowns, anytime / 2+ / first TD scorer, and more), plus moneylines, spreads, game totals and team totals in every league.
 - **Ungraded, with the reason shown:** player props in other sports and unusual custom bets.
 - A player who didn't play is shown as ungraded, matching how sportsbooks usually void those bets.
 
-**Hit rate** = wins ÷ (wins + losses). Pushes and ungraded bets are left out.
+**Kalshi prices.** Kalshi is a regulated exchange where every outcome trades as a contract that pays $1 if it happens. A price of 62¢ means the market thinks there's a 62% chance. For each pick the app finds the matching Kalshi market and records:
+- **at post**: the price in the hour the capper posted it (what you could have bought it for),
+- **before kickoff**: the last price before the game,
+- **now**: the live price, for games that haven't started.
 
-**Hit rate is not profit.** An anytime-TD bet at +400 only needs to win about 20% of the time to break even. Where accounts posted their odds, the Trends tab shows the **break-even** rate those odds require, and the **flat 1u P/L**: the profit or loss from betting 1 unit on each.
+How picks are matched to Kalshi markets:
+- **Exact line:** "Over 74.5 receiving yards" is Kalshi's "75+ receiving yards"; unders use the "No" side of the same market, and an underdog +3.5 is "No" on the favorite winning by over 3.5.
+- **"≈" (interpolated):** when Kalshi doesn't offer the exact line (over 19.5 yards, but Kalshi has 15+ and 25+), the price is estimated between the two neighboring lines and marked with "≈".
+- **No match:** the reason is shown on the Picks tab, e.g. the player isn't listed or Kalshi has no market for that stat.
+- **Accuracy:** checked against all of weeks 4–7, about 78% of picks match a Kalshi market, and on every exact match Kalshi's settled result agreed with the ESPN box score (523 of 523).
 
-**The 95% range** (the thin line on the Trends bars) shows how much to trust a hit rate. 4–1 and 40–10 are both 80%, but the second is far more convincing. "Most reliable" ranks accounts by the low end of that range, so a lucky small sample can't top the list.
+**Hit rate** = wins ÷ (wins + losses). Pushes and ungraded bets are left out. When ESPN can't grade a pick (e.g. NBA and NHL player props), Kalshi's settled result is used instead.
+
+**Beating the market** is what matters, not a 50% hit rate. On the Analysis page:
+- **Vs market**: actual hit rate minus the average Kalshi price when posted. +9 pts means the account's picks hit 9 points more often than the market expected, i.e. they find underpriced bets.
+- **Profit at Kalshi prices**: what you'd have made per $1 buying each pick at the moment it was posted (Kalshi's small trading fees are ignored).
+- **Price moved**: how Kalshi's price changed between the post and kickoff. If prices keep moving toward an account's picks after they post, the market is catching up to them, which is a strong sign of skill that shows up faster than win-loss records.
+
+**Hit rate is not profit.** An anytime-TD bet at +400 only needs to win about 20% of the time to break even, and a 60% favorite that hits 58% of the time loses money. That's why the market comparison above exists.
+
+**The 95% range** (the thin line on the "Who hits" bars) shows how much to trust a hit rate. 4–1 and 40–10 are both 80%, but the second is far more convincing. "Most reliable" ranks accounts by the low end of that range, so a lucky small sample can't top the list.
 
 ---
 
@@ -226,6 +251,8 @@ NFL weeks run **Tuesday to Monday** (Eastern time). A Thursday run sees posts si
 | **Split** | Accounts posted the same bet at different lines, and some won while others lost. |
 | **Odds (+150 / -110)** | +150 wins $150 on a $100 bet; -110 risks $110 to win $100. |
 | **Unit (u)** | A standard bet size, so results compare fairly across people. |
+| **Kalshi price** | The market's probability, in cents: 62¢ = 62% chance. |
+| **Vs market (pts)** | How much more (or less) often picks hit than Kalshi's price said they would. |
 | **1H / 1Q / 2H** | First half, first quarter, second half. |
 
 ---
@@ -236,10 +263,10 @@ NFL weeks run **Tuesday to Monday** (Eastern time). A Thursday run sees posts si
 |---|---|---|
 | X API (pay-per-use) | ~$0.005 per post, ~$0.01 the first time each account is looked up | 20 accounts × ~50 posts ≈ **$5** |
 | Anthropic (Claude) | Per post read; posts with bet-slip images cost more | A few dollars |
-| ESPN data | Free | — |
+| ESPN data, Kalshi prices | Free | — |
 
 - **Post cap:** by default each run keeps only each account's newest **15** posts (`MAX_TWEETS_PER_ACCOUNT`). Each fetch prints a cost estimate and lists accounts that hit the cap.
-- **Free buttons:** the web page asks you to confirm before any paid run. **Report only**, **Results** and **Trends** are always free.
+- **Free buttons:** the web page asks you to confirm before any paid run. **Report only** and all three pages (Live, History, Analysis) are always free.
 
 ### Settings
 
@@ -264,6 +291,8 @@ All optional, in `.env`:
 | `ModuleNotFoundError` | Your environment isn't active. Run `conda activate capper` (or `source .venv/bin/activate`). |
 | `@handle not found on X` | Check the spelling in `accounts.txt`; the account may have been renamed or suspended. |
 | Game times or results are blank | ESPN couldn't be reached, or the team couldn't be matched. Everything else still works; press **Refresh** later. |
+| A bet shows "Kalshi —" | No matching Kalshi market. Hover it, or check the Picks tab, for the reason. |
+| Analysis takes a minute or two the first time | It's fetching every game and price history once; after that it's cached in `data/`. |
 | A bet looks wrong | Open the **Picks** tab, find it, and click ↗ to see the original post. |
 | Something else failed during a scheduled run | See `logs/run.log`. Runs started from the web page are logged in `logs/web_runs/`. |
 
@@ -274,20 +303,21 @@ All optional, in `.env`:
 ```
 accounts.txt ─► X API ─► SQLite database ─► Claude reads posts & bet slips ─► analysis ─┬─► web app (FastAPI + React)
                                                                                         └─► Excel report
-                         ESPN schedules & box scores ─► game times, results, grading ───┘
+                         ESPN schedules & box scores ─► game times, results, grading ───┤
+                         Kalshi markets & price history ─► odds at post / kickoff / now ─┘
 ```
 
 | Path | What's in it |
 |---|---|
-| `capper_tracker/` | The Python code: `x_client.py` (X API), `extractor.py` (Claude), `normalize.py` + `analyze.py` (grouping and consensus), `games.py` (ESPN schedules), `results.py` (grading), `trends.py` (cross-week stats), `api.py` + `server.py` (web server), `pipeline.py` (ties the steps together), `schedule.py` (Mac scheduling) |
+| `capper_tracker/` | The Python code: `x_client.py` (X API), `extractor.py` (Claude), `normalize.py` + `analyze.py` (grouping and consensus), `games.py` (ESPN schedules), `results.py` (grading), `kalshi.py` (matching picks to Kalshi markets and pricing them), `trends.py` (cross-week stats), `api.py` + `server.py` (web server), `pipeline.py` (ties the steps together), `schedule.py` (Mac scheduling) |
 | `web/` | The web page (React + TypeScript). `src/views/` has one file per tab. |
 | `tests/` | Automated tests. They use fake data and need no API keys. |
-| `data/` | Your local database (`cappers.db`) and cached ESPN data. Not uploaded to git. |
+| `data/` | Your local database (`cappers.db`) and cached ESPN and Kalshi data. Not uploaded to git. |
 | `exports/` | Generated Excel reports. Not uploaded to git. |
 
 Things to know:
 - **One source of truth:** the database is the record of everything. The web app and the Excel report are built by the same code, so they always agree.
-- **Caching:** box scores and schedules for finished games are cached in `data/`, so grading past weeks is fast after the first load.
+- **Caching:** box scores, schedules and Kalshi prices for finished games are cached in `data/`, so past weeks are fast after the first load. Live prices are re-checked every couple of minutes.
 - **Local only:** the web server only accepts connections from your own computer, because it can start paid runs and has no login.
 
 ### For developers
@@ -305,6 +335,7 @@ The dev UI forwards `/api` requests to the Python server on port 8000. Interacti
 
 - **X API:** built and tested against simulated responses. When first setting up, try one or two accounts and check the **Posts** tab.
 - **Player teams:** a player's team comes from the post and the AI's knowledge, so a mid-season trade can mislabel a team.
-- **Grading coverage:** only football player props are graded so far. NBA, NHL and MLB props show as ungraded.
+- **Grading coverage:** football props and game lines are graded from box scores; other sports' props are graded from Kalshi's settlement when Kalshi lists them, and otherwise show as ungraded.
+- **Kalshi coverage:** Kalshi doesn't list every player, every line, college player props, NHL shots on goal, or NBA preseason props. Those picks show the reason instead of a price.
 - **Video posts:** Claude only sees a preview frame.
 - **Very busy accounts:** X only returns an account's most recent ~3,200 posts, so a very busy account's older weeks may be out of reach.

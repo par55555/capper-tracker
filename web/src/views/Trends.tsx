@@ -3,6 +3,8 @@ import { DataTable, type Column } from "../components/DataTable";
 import { Chips, League, Stat } from "../components/bits";
 import type { Row, TrendsReport } from "../types";
 import { AgreementChart } from "./Results";
+import { MarketSection } from "./Market";
+import { fmtPts } from "../format";
 
 const pct = (r: number | null | undefined) => (r == null ? "—" : `${Math.round(r * 100)}%`);
 const wl = (r: Row) => `${r.won}–${r.lost}${r.push ? `–${r.push}` : ""}`;
@@ -225,7 +227,10 @@ function Markets({ rows, styles }: { rows: Row[]; styles: Row[] }) {
         </span>) },
     { key: "won", label: "Record", render: wl, sortValue: (r) => r.graded },
     { key: "accounts", label: "Accounts", align: "right" },
-    { key: "breakeven", label: "Break-even", align: "right", render: (r) => r.priced ? pct(r.breakeven) : "",
+    { key: "mkt_edge", label: "Vs Kalshi", align: "right",
+      render: (r) => r.mkt_n ? <span className={r.mkt_edge > 0.005 ? "pos" : r.mkt_edge < -0.005 ? "neg" : ""} title={`Hit ${pct(r.mkt_actual)} vs Kalshi ${pct(r.mkt_expected)} on ${r.mkt_n} priced picks`}>{fmtPts(r.mkt_edge)}</span> : "",
+      title: "Hit rate minus Kalshi's average price when posted" },
+    { key: "breakeven", label: "Posted-odds break-even", align: "right", render: (r) => r.priced ? pct(r.breakeven) : "",
       title: "Average hit rate the posted odds need to break even (straight bets with odds only)" },
     { key: "units", label: "Flat 1u P/L", align: "right", render: (r) => r.priced ? <span className={r.units > 0 ? "pos" : r.units < 0 ? "neg" : ""}>{units(r.units)} <span className="muted small">({r.priced})</span></span> : "",
       title: "Profit staking 1 unit on each straight bet with posted odds. (n) = how many bets had odds." },
@@ -276,7 +281,7 @@ export function Trends({ data }: { data: TrendsReport }) {
     <div className="stack">
       <div>
         <p className="section-sub note">
-          Weeks {weeks[0]}–{weeks[weeks.length - 1]}, every graded pick. Not affected by the week picker.
+          Weeks {weeks[0]}–{weeks[weeks.length - 1]}, every graded pick.
           Hit rate isn't profit: long-odds picks can hit rarely and still win money.
         </p>
         <div className="stats">
@@ -289,6 +294,7 @@ export function Trends({ data }: { data: TrendsReport }) {
         </div>
       </div>
 
+      <MarketSection data={data} />
       <WhoHits rows={cappers} />
       <div className="two-col">
         <WeeklyChart rows={weekly} />

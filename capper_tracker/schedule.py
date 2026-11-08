@@ -24,11 +24,25 @@ LABEL = "com.capper-tracker.weekly"
 PLIST = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 LOG = ROOT / "logs" / "run.log"
 
-# launchd weekdays: 0 = Sunday ... 4 = Thursday. Times are the Mac's local time.
-SCHEDULE = [
-    {"Weekday": 4, "Hour": 12, "Minute": 0},   # Thursday noon, before TNF
-    {"Weekday": 0, "Hour": 11, "Minute": 0},   # Sunday 11am, before the early games
+# launchd weekdays: 0 = Sunday ... 6 = Saturday. Times are the Mac's local time (set for US Eastern).
+#
+# Chosen from when picks are actually posted (weeks 4-7): most go up 1-8 hours before their game,
+# so a pull must land shortly before each slate. Replaying every stored pick against this schedule,
+# 83% of all picks (91% of NFL) are fetched before their game starts, vs 37% (62% NFL) with the old
+# Thursday-noon + Sunday-11am schedule. Extra pulls cost little: X bills per new post, and each run
+# only asks for posts since the last one.
+_NFL = [
+    (4, 19, 30),   # Thu 7:30pm   before Thursday Night Football
+    (0, 8, 45),    # Sun 8:45am   before London games; catches the overnight/early-morning posts
+    (0, 12, 15),   # Sun 12:15pm  before the 1:00 games
+    (0, 15, 30),   # Sun 3:30pm   before the 4:05 / 4:25 games
+    (0, 19, 30),   # Sun 7:30pm   before Sunday Night Football
+    (1, 19, 30),   # Mon 7:30pm   before Monday Night Football
 ]
+_COLLEGE = [(6, 11, 15), (6, 15, 0)]                       # Sat: before noon and 3:30 kickoffs
+_DAILY = [(d, 18, 30) for d in range(7)]                    # 6:30pm every day: evening NBA/NHL/MLB
+_MIDDAY = [(d, 12, 30) for d in (1, 2, 3, 4, 5)]            # 12:30pm weekdays: afternoon slates
+SCHEDULE = [{"Weekday": d, "Hour": h, "Minute": m} for d, h, m in _NFL + _COLLEGE + _DAILY + _MIDDAY]
 
 
 def build_plist(python: str = sys.executable) -> dict:
@@ -63,7 +77,9 @@ def install() -> None:
         plistlib.dump(build_plist(), f)
     _launchctl("bootstrap", _domain(), str(PLIST))
     print(f"Installed {PLIST}")
-    print(f"Runs Thursday 12:00 and Sunday 11:00 using {sys.executable}")
+    print(f"Runs {len(SCHEDULE)} times a week around game windows (see SCHEDULE in schedule.py), "
+          f"using {sys.executable}")
+    print("Notifications only appear when a new shared bet shows up, or when something fails.")
     print(f"Log: {LOG}   Latest report: {ROOT / 'exports' / 'latest_consensus.xlsx'}")
 
 

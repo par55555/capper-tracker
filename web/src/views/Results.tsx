@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { DataTable, type Column } from "../components/DataTable";
 import { Chips, Handles, League, Stat, TweetLink } from "../components/bits";
-import { fmtGameTime, fmtNum, fmtOdds, fmtPostTime } from "../format";
+import { fmtGameTime, fmtNum, fmtOdds, fmtPostTime, fmtProb } from "../format";
 import type { Record3, ResultsReport, Row } from "../types";
 
 const RESULTS = ["Won", "Lost", "Push", "Split", "Pending", "Ungraded"] as const;
@@ -73,6 +73,8 @@ function BetsTable({ rows }: { rows: Row[] }) {
     { key: "bet", label: "Bet", render: (r) => <span className="wrap">{r.bet}</span> },
     { key: "lines", label: "Lines" },
     { key: "actual", label: "What happened", render: (r) => <span className={`wrap ${r.result === "Ungraded" ? "muted" : ""}`}>{r.actual}</span> },
+    { key: "kalshi_avg_post", label: "Market gave it", align: "right", title: "Kalshi's probability when the accounts posted it (average across accounts)",
+      render: (r) => r.kalshi_avg_post != null ? <span title={r.kalshi_title}>{r.kalshi_match === "interpolated" ? "≈" : ""}{fmtProb(r.kalshi_avg_post)}</span> : <span className="muted">—</span> },
     { key: "game", label: "Game", render: (r) => <><League league={r.league} /> {r.game} <span className="muted small">{fmtGameTime(r.game_time_et)}</span></>,
       sortValue: (r) => r.game_time_et },
     { key: "who", label: "Who", render: (r) => r.result === "Split"
@@ -131,6 +133,8 @@ function EveryPick({ rows }: { rows: Row[] }) {
     { key: "line", label: "Line", align: "right", render: (r) => fmtNum(r.line) },
     { key: "odds", label: "Odds", align: "right", render: (r) => fmtOdds(r.odds) },
     { key: "actual_text", label: "What happened", render: (r) => <span className="wrap">{r.actual_text}</span> },
+    { key: "kalshi_prob_post", label: "Market gave it", align: "right",
+      render: (r) => r.kalshi_prob_post != null ? <span title={r.kalshi_title}>{r.kalshi_match === "interpolated" ? "≈" : ""}{fmtProb(r.kalshi_prob_post)}</span> : <span className="muted">—</span> },
     { key: "parlay_group", label: "", render: (r) => r.parlay_group ? <span className="tag">parlay leg</span> : "" },
     { key: "created_at", label: "Posted", render: (r) => <span className="nowrap">{fmtPostTime(r.created_at)}</span> },
     { key: "url", label: "", render: (r) => <TweetLink url={r.url} /> },

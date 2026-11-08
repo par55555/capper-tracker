@@ -90,6 +90,27 @@ def parse_scoreboard(data: dict, league: str) -> list[Game]:
     return games
 
 
+def side_strength(team, abbrs: set, names: set) -> int:
+    """How well a team string fits one side of a game: 3 exact abbreviation, 2 exact name, 1 loose, 0 no."""
+    n = _norm(team)
+    if not n:
+        return 0
+    if n in abbrs:
+        return 3
+    if n in names:
+        return 2
+    return 1 if _side_matches(team, abbrs, names) else 0
+
+
+def pick_side(team, home: tuple[set, set], away: tuple[set, set]) -> str | None:
+    """'home' / 'away' for a team string, preferring the stronger match ("LOUISIANA TECH" is the
+    exact name of one side and only a loose fit for "Louisiana"). None if absent or a tie."""
+    h, a = side_strength(team, *home), side_strength(team, *away)
+    if h == a:
+        return None
+    return "home" if h > a else "away"
+
+
 def _side_matches(team, abbrs: set, names: set) -> bool:
     """Our team string ('SD', 'NYL', 'New York Liberty', 'Ottawa Senators') vs one side of a game."""
     n = _norm(team)

@@ -56,6 +56,56 @@ def _money(grp: pd.DataFrame) -> dict:
             "units": round(float(pl.sum()), 2), "roi": round(float(pl.sum() / len(s)), 4)}
 
 
+def _vs_market(grp: pd.DataFrame) -> dict:
+    """How picks did against Kalshi's own odds.
+
+    expected  average Kalshi probability when the pick was posted (what the market thought)
+    edge      actual hit rate minus expected, in points (positive = beat the market)
+    roi       profit per $1 buying the pick's side at the posted-time Kalshi price (exact matches,
+              fees ignored)
+    move      average price change from post to kickoff; positive = the market moved toward the pick
+    """
+    empty = {"mkt_n": 0, "mkt_expected": None, "mkt_actual": None, "mkt_edge": None,
+             "mkt_roi": None, "mkt_roi_n": 0, "mkt_move": None, "mkt_move_up": None}
+    if "kalshi_prob_post" not in grp:
+        return empty
+    s = grp[grp["result"].isin([WON, LOST]) & grp["kalshi_prob_post"].notna()]
+    if s.empty:
+        return empty
+    won = s["result"].eq(WON)
+    out = {"mkt_n": len(s), "mkt_expected": round(float(s["kalshi_prob_post"].mean()), 4),
+           "mkt_actual": round(float(won.mean()), 4)}
+    out["mkt_edge"] = round(out["mkt_actual"] - out["mkt_expected"], 4)
+    c = s[s["kalshi_cost_post"].notna() & s["kalshi_match"].eq("exact")]
+    if not c.empty:
+        cost = c["kalshi_cost_post"].astype(float)
+        profit = np.where(c["result"].eq(WON), 1 - cost, -cost)
+        out["mkt_roi"], out["mkt_roi_n"] = round(float(profit.sum() / cost.sum()), 4), len(c)
+    else:
+        out["mkt_roi"], out["mkt_roi_n"] = None, 0
+    mv = s["kalshi_move"].dropna() if "kalshi_move" in s else pd.Series(dtype=float)
+    out["mkt_move"] = round(float(mv.mean()), 4) if not mv.empty else None
+    out["mkt_move_up"] = round(float((mv > 0.005).mean()), 4) if not mv.empty else None
+    return out
+
+
+def calibration(g: pd.DataFrame) -> pd.DataFrame:
+    """Picks bucketed by Kalshi's probability at post time: did they hit more or less than priced?"""
+    if "kalshi_prob_post" not in g:
+        return pd.DataFrame()
+    s = g[g["result"].isin([WON, LOST]) & g["kalshi_prob_post"].notna()]
+    if s.empty:
+        return pd.DataFrame()
+    bins = [0, 0.1, 0.25, 0.4, 0.55, 0.7, 0.85, 1.0001]
+    labels = ["Under 10%", "10–25%", "25–40%", "40–55%", "55–70%", "70–85%", "85%+"]
+    s = s.assign(bucket=pd.cut(s["kalshi_prob_post"], bins, labels=labels, right=False))
+    rows = []
+    for b, grp in s.groupby("bucket", observed=True):
+        rec = _rec(grp["result"])
+        rows.append({"bucket": str(b), **rec, **_vs_market(grp)})
+    return pd.DataFrame(rows)
+
+
 def market_of(r: dict) -> str:
     bt = r.get("bet_type")
     if bt == "player_prop":
@@ -88,6 +138,7 @@ def weekly(g: pd.DataFrame, bets: pd.DataFrame) -> pd.DataFrame:
         a, s = _rec(gw["result"]), _rec(shared["result"] if not shared.empty else pd.Series(dtype=str))
         rows.append({"week": int(w), "picks": len(gw), "accounts": gw["handle"].nunique(),
                      **{f"all_{k}": v for k, v in a.items()}, **{f"shared_{k}": v for k, v in s.items()},
+                     **_vs_market(gw),
                      "ungraded": int((gw["result"] == results.UNGRADED).sum()),
                      "pending": int((gw["result"] == results.PENDING).sum())})
     return pd.DataFrame(rows)
@@ -118,6 +169,7 @@ def cappers(g: pd.DataFrame, bets: pd.DataFrame, min_market: int = 3) -> pd.Data
                      "shared_won": srec["won"], "shared_lost": srec["lost"], "shared_hit_rate": srec["hit_rate"],
                      "best_market": best, "worst_market": worst,
                      **{f"straight_{k}": v for k, v in _money(grp).items()},
+                     **_vs_market(grp),
                      "ungraded": int((grp["result"] == results.UNGRADED).sum())})
     out = pd.DataFrame(rows)
     if out.empty:
@@ -139,16 +191,27 @@ def markets(g: pd.DataFrame) -> pd.DataFrame:
         if rec["graded"] == 0:
             continue
         rows.append({"league": league, "market": market, **rec, "accounts": grp["handle"].nunique(),
-                     **_money(grp)})
+                     **_money(grp), **_vs_market(grp)})
     out = pd.DataFrame(rows)
     return out.sort_values("graded", ascending=False).reset_index(drop=True) if not out.empty else out
 
 
 def styles(g: pd.DataFrame) -> pd.DataFrame:
     is_leg = g["parlay_group"].notna() if "parlay_group" in g else pd.Series(False, index=g.index)
-    rows = [{"style": name, **_rec(g.loc[mask, "result"]), **_money(g.loc[mask])}
+    rows = [{"style": name, **_rec(g.loc[mask, "result"]), **_money(g.loc[mask]), **_vs_market(g.loc[mask])}
             for name, mask in (("Straight bets", ~is_leg), ("Parlay legs", is_leg))]
     return pd.DataFrame(rows)
+
+
+def agreement_vs_market(g: pd.DataFrame, bets: pd.DataFrame) -> pd.DataFrame:
+    """Per agreement tier (1, 2, 3, 4+ accounts on the bet): hit rate vs Kalshi's price, per pick."""
+    if bets.empty:
+        return pd.DataFrame()
+    n = bets.set_index(["week", "bet_key"])["accounts"]
+    acc = [n.get((w, k), 1) for w, k in zip(g["week"], g["bet_key"])]
+    g = g.assign(tier=pd.Series(acc, index=g.index).clip(upper=4).map(
+        {1: "1 account", 2: "2 accounts", 3: "3 accounts", 4: "4+ accounts"}))
+    return pd.DataFrame([{"tier": t, **_rec(x["result"]), **_vs_market(x)} for t, x in g.groupby("tier")])
 
 
 def trends_report(g: pd.DataFrame) -> dict:
@@ -164,5 +227,8 @@ def trends_report(g: pd.DataFrame) -> dict:
             "Markets": markets(g),
             "Agreement": results.by_agreement(bets) if not bets.empty else pd.DataFrame(),
             "Styles": styles(g),
+            "Calibration": calibration(g),
+            "Agreement vs Market": agreement_vs_market(g, bets),
+            "Market Overall": pd.DataFrame([{"scope": "All picks", **_rec(g["result"]), **_vs_market(g)}]),
         },
     }

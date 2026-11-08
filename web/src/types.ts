@@ -76,3 +76,18 @@ export interface TrendsReport {
   weeks: number[];
   frames: Record<string, Frame>;
 }
+
+export interface WeekPayload {
+  window: { name: string; label: string; live: boolean; start: string; end: string };
+  built_at: string;
+  summary: Summary & { priced: number };
+  results_summary: ResultsReport["summary"];
+  frames: Record<string, Frame>;
+  results: Record<string, Frame>;
+}
+
+export interface ExportFile {
+  name: string;
+  size: number;
+  modified: string;
+}

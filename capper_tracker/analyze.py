@@ -348,12 +348,18 @@ def conflicts(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build_report(picks: pd.DataFrame, tweets: pd.DataFrame, schedule: Schedule | None = None,
-                 game_days: tuple[date, date] | None = None) -> dict[str, pd.DataFrame]:
-    df = prepare(picks)
-    if not df.empty:
-        first, last = game_days or (date.today(), date.today())
-        df = attach_games(df, schedule, first, last)
+def build_report(picks: pd.DataFrame | None, tweets: pd.DataFrame, schedule: Schedule | None = None,
+                 game_days: tuple[date, date] | None = None,
+                 prepared: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
+    """Report tables. Pass `prepared` (prepare() + attach_games() output, possibly with extra
+    columns such as Kalshi prices) to skip those steps."""
+    if prepared is not None:
+        df = prepared
+    else:
+        df = prepare(picks)
+        if not df.empty:
+            first, last = game_days or (date.today(), date.today())
+            df = attach_games(df, schedule, first, last)
     consensus = consensus_bets(df)
     players = player_consensus(df)
     # Games already played are settled; they shouldn't crowd out bets you can still make.
@@ -362,13 +368,15 @@ def build_report(picks: pd.DataFrame, tweets: pd.DataFrame, schedule: Schedule |
     if consensus.empty:
         summary = settled = consensus
     else:
-        shared = consensus[consensus["accounts"] >= 2].drop(columns="bet_key")
+        shared = consensus[consensus["accounts"] >= 2]  # bet_key kept for joins; dropped on export
         is_final = shared["game_status"].eq("Final")
         summary = shared[~is_final].reset_index(drop=True)   # every shared bet still to be played
         settled = shared[is_final].reset_index(drop=True)
     pick_cols = ["handle", "created_at", "league", "game_time_et", "game", "label", "line", "odds", "units", "times_posted",
                  "switched_side", "bet_type", "category", "player", "team", "stat", "stat_detail",
-                 "side", "parlay_group", "snippet", "url"]
+                 "side", "parlay_group", "snippet", "url", "bet_key", "event_id", "period", "direction",
+                 "kalshi_ticker", "kalshi_title", "kalshi_side", "kalshi_match", "kalshi_note",
+                 "kalshi_prob_post", "kalshi_cost_post", "kalshi_prob_close", "kalshi_prob_now", "kalshi_move"]
     pick_cols = [c for c in pick_cols if c in df.columns]
     if not tweets.empty:
         tweets = tweets.copy()

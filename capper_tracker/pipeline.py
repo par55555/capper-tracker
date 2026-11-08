@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import db, games, results
+from . import db, games, kalshi, results
 from .analyze import build_report, prepare
 from .config import (ACCOUNTS_FILE, EXPORT_DIR, EXTRACT_WORKERS, MAX_TWEETS_PER_ACCOUNT, ROOT, TZ,
                      Window, nfl_week)
@@ -99,6 +99,7 @@ def extract(conn, extractor, window: Window, retry_failed: bool = True, redo_all
                 log.error("Extraction failed for %s: %s", tweet["url"], e)
                 db.mark_failed(conn, tweet["tweet_id"], repr(e))
                 stats["failed"] += 1
+                stats.setdefault("first_error", repr(e)[:300])
                 continue
             db.save_extraction(conn, tweet, result.tweet_type, result.picks, extractor.model)
             stats["picks"] += len(result.picks)
@@ -125,12 +126,34 @@ def build_frames(conn, window: Window, schedule: "games.Schedule | None" = None)
 
 
 def graded_picks(conn, window: Window, schedule: "games.Schedule | None" = None,
-                 boxes: "results.BoxScores | None" = None):
-    """Each account's picks in the window (deduped as in the report), graded against box scores."""
+                 boxes: "results.BoxScores | None" = None, with_kalshi: bool = True,
+                 client: "kalshi.Kalshi | None" = None):
+    """Each account's picks in the window (deduped as in the report), with game, Kalshi prices,
+    and a grade: ESPN box scores first, Kalshi's settlement where ESPN can't grade."""
     df = prepare(db.picks_frame(conn, window.start_utc, window.end_utc))
+    schedule = schedule or _schedule()
     if not df.empty:
-        df = games.attach_games(df, schedule or _schedule(), *_game_days(window))
-    return results.grade(df, boxes)
+        df = games.attach_games(df, schedule, *_game_days(window))
+        if with_kalshi:
+            df = kalshi.attach_prices(df, schedule, client)
+    g = results.grade(df, boxes)
+    return results.apply_kalshi_settlement(g) if with_kalshi else g
+
+
+def week_bundle(conn, window: Window, with_kalshi: bool = True, boxes=None, client=None) -> dict:
+    """Everything the web app shows for one window, built in one pass: the report tables (with
+    Kalshi prices joined onto each bet), and the graded results."""
+    g = graded_picks(conn, window, boxes=boxes, with_kalshi=with_kalshi, client=client)
+    frames = build_report(None, db.tweets_frame(conn, window.start_utc, window.end_utc), prepared=g)
+    res = results.results_report(g)
+    if with_kalshi and not g.empty:
+        summary = kalshi.bet_summary(g)
+        for name in ("Top Consensus", "All Bets", "Already Played"):
+            if not frames[name].empty:
+                frames[name] = frames[name].merge(summary, on="bet_key", how="left")
+        if not res["frames"]["Bet Results"].empty:
+            res["frames"]["Bet Results"] = res["frames"]["Bet Results"].merge(summary, on="bet_key", how="left")
+    return {"frames": frames, "results": res, "graded": g}
 
 
 def _frames(conn, window: Window, schedule: "games.Schedule | None" = None):
@@ -156,6 +179,7 @@ def summary(conn, window: Window, top_n: int = 3) -> dict:
     frames = _frames(conn, window)
     picks, top = frames["Picks"], frames["Top Consensus"]
     return {
+        "shared": [r.bet for r in top.itertuples()] if not top.empty else [],
         "picks": len(picks),
         "accounts_with_picks": picks["handle"].nunique() if not picks.empty else 0,
         "shared_bets": len(top),

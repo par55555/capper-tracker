@@ -24,7 +24,7 @@ import pandas as pd
 import requests
 
 from .config import ROOT
-from .games import ESPN_PATHS, _side_matches, _team_keys, league_key
+from .games import ESPN_PATHS, _side_matches, _team_keys, league_key, pick_side
 
 log = logging.getLogger(__name__)
 
@@ -60,9 +60,10 @@ class BoxScore:
 
     def side_of(self, team) -> tuple[Side, Side] | None:
         """(team's side, opponent's side) for a team string, or None if it isn't in this game."""
-        if _side_matches(team, self.home.abbrs, self.home.names):
+        side = pick_side(team, (self.home.abbrs, self.home.names), (self.away.abbrs, self.away.names))
+        if side == "home":
             return self.home, self.away
-        if _side_matches(team, self.away.abbrs, self.away.names):
+        if side == "away":
             return self.away, self.home
         return None
 
@@ -355,6 +356,18 @@ def grade_pick(r: dict, boxes: BoxScores) -> Grade:
     return grade_game_line(r, box)
 
 
+def apply_kalshi_settlement(g: pd.DataFrame) -> pd.DataFrame:
+    """Grade picks ESPN couldn't (other sports' props, custom lines) from Kalshi's settled result.
+    Only exact Kalshi matches are used; ESPN's grade always wins when it has one."""
+    if g.empty or "kalshi_result" not in g:
+        return g
+    g = g.copy()
+    use = g["result"].eq(UNGRADED) & g["kalshi_result"].isin([WON, LOST])
+    g.loc[use, "result"] = g.loc[use, "kalshi_result"]
+    g.loc[use, "actual_text"] = "Settled on Kalshi: " + g.loc[use, "kalshi_title"].fillna("")
+    return g
+
+
 def clean_records(df: pd.DataFrame) -> list[dict]:
     """Rows as dicts with NaN -> None: pandas stores missing values as NaN, which slips past
     "is None" checks and fails every comparison."""
@@ -470,7 +483,8 @@ def results_report(g: pd.DataFrame) -> dict:
     bets = bet_results(g)
     shared = bets[bets["accounts"] >= 2] if not bets.empty else bets
     pick_cols = ["handle", "created_at", "league", "game", "game_time_et", "label", "line", "odds",
-                 "parlay_group", "result", "actual_text", "snippet", "url"]
+                 "parlay_group", "result", "actual_text", "snippet", "url",
+                 "kalshi_title", "kalshi_match", "kalshi_prob_post", "kalshi_cost_post", "kalshi_move"]
     return {
         "summary": {
             "shared": {**_record(shared["result"] if not shared.empty else pd.Series(dtype=str)),

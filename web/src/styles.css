@@ -366,3 +366,45 @@ table.heat td { border: 0; padding: 0; }
 
 @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
 @media (max-width: 600px) { .ci-row { grid-template-columns: 96px 1fr 70px; } .ci-row .hbar-value .small { display: none; } }
+
+/* --- sections (Live / History / Analysis) --- */
+.sections { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px; }
+.sections button { border: 0; background: transparent; padding: 6px 16px; border-radius: 7px; cursor: pointer; color: var(--muted); font-weight: 600; display: inline-flex; align-items: center; gap: 7px; }
+.sections button:hover { color: var(--text); }
+.sections button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); animation: pulse 1.6s infinite; }
+.icon-btn { padding: 6px 10px; font-size: 15px; line-height: 1; }
+.icon-btn.on { background: var(--surface-2); }
+@media (max-width: 760px) { .sections { order: 3; width: 100%; } .sections button { flex: 1; justify-content: center; } }
+
+/* --- Kalshi prices --- */
+.bet-title-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.kalshi { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 13px;
+          background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px; padding: 2px 8px; }
+.kalshi strong { font-size: 14px; }
+.kalshi-label { font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: var(--muted); }
+.kalshi.none { color: var(--muted); font-size: 11px; border-style: dashed; background: transparent; }
+.kalshi .pos, .kalshi .neg { font-size: 11px; font-weight: 600; }
+
+/* --- downloads --- */
+.file-list { list-style: none; margin: 0; padding: 0; }
+.file-list li { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 9px 2px; border-bottom: 1px solid var(--border); }
+.file-list li:last-child { border-bottom: 0; }
+
+/* --- expected vs actual dot plot --- */
+.dots { display: flex; flex-direction: column; gap: 2px; }
+.dot-row { display: grid; grid-template-columns: 110px 1fr 120px; align-items: center; gap: 12px; padding: 7px 0; border-radius: 6px; }
+.dot-row.hover { background: var(--surface-2); }
+.dot-track { position: relative; height: 16px; }
+.dot-track::before { content: ""; position: absolute; left: 0; right: 0; top: 7px; height: 2px; background: var(--surface-2); border-radius: 1px; }
+.dot-row.hover .dot-track::before { background: var(--border); }
+.dot-gap { position: absolute; top: 6px; height: 4px; border-radius: 2px; background: var(--muted); opacity: 0.5; }
+.dot-gap.pos { background: var(--pos); opacity: 0.8; }
+.dot-gap.neg { background: var(--neg); opacity: 0.8; }
+.dot-mark { position: absolute; top: 2px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; box-sizing: border-box; }
+.dot-mark.ring { border: 2px solid var(--muted); background: var(--surface); }
+.dot-mark.fill { background: var(--series-1); box-shadow: 0 0 0 2px var(--surface); }
+.dot-key { display: inline-block; width: 10px; height: 10px; border-radius: 50%; box-sizing: border-box; }
+.dot-key.ring { border: 2px solid var(--muted); }
+.dot-key.fill { background: var(--series-1); }
+@media (max-width: 600px) { .dot-row { grid-template-columns: 80px 1fr 70px; gap: 8px; } .dot-row .hbar-value .small { display: none; } }

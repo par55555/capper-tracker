@@ -13,6 +13,8 @@ from .config import TZ
 _HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 _HEADER_FONT = Font(name="Arial", bold=True, color="FFFFFF")
 _BODY_FONT = Font(name="Arial", size=10)
+INTERNAL_COLUMNS = {"bet_key", "event_id", "direction", "kalshi_ticker", "kalshi_side", "kalshi_note",
+                    "kalshi_cost_post"}
 _WRAP_COLUMNS = {"who", "bets", "pass_players", "run_players", "td_players", "snippet", "text",
                  "what_it_means", "meaning", "post_type"}
 
@@ -33,6 +35,8 @@ def write_report(frames: dict[str, pd.DataFrame], path: Path) -> Path:
     with pd.ExcelWriter(path, engine="openpyxl") as xw:
         for name, df in frames.items():
             df = df if not df.empty else pd.DataFrame({"note": ["No data for this week yet."]})
+            # Internal join keys and raw match columns aren't useful in the spreadsheet.
+            df = df.drop(columns=[c for c in df.columns if c in INTERNAL_COLUMNS], errors="ignore")
             _excel_safe(df).to_excel(xw, sheet_name=name[:31], index=False)
 
     wb = load_workbook(path)
