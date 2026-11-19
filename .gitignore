@@ -3,4 +3,4 @@ data/
 exports/
 __pycache__/
 .DS_Store
-logs/web_runs/
+logs/
